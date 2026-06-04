@@ -10,6 +10,7 @@ softdepend:
   - MMOItems
   - dynmap
   - ExcellentEconomy
+  - Vault
   - PlaceholderAPI
   - FastAsyncWorldEdit
   - WorldEdit
@@ -19,7 +20,7 @@ commands:
   civcraftmodern:
     aliases: [civcraft]
     description: CivCraft diagnostics and admin commands.
-    usage: /<command> [reload|integrations|resident|camp|civ|town]
+    usage: /<command> [reload|integrations|resident|camp|civ|town|research]
     permission: civcraft.use
   resident:
     aliases: [res]
@@ -39,8 +40,19 @@ commands:
     description: Town mechanics owned by CivCraft.
     usage: /<command> [create <name>]
     permission: civcraft.use
+  build:
+    description: Builds legacy CivCraft .def structures.
+    usage: /<command> [list|structure <id> [direction]|legacy <type> <template> [direction]]
+    permission: civcraft.build
+  research:
+    aliases: [tech]
+    description: Starts and shows civilization technology research.
+    usage: /<command> [list|start <id>|status]
+    permission: civcraft.use
 permissions:
   civcraft.use:
     default: true
   civcraft.admin:
+    default: op
+  civcraft.build:
     default: op

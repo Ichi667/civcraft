@@ -28,6 +28,7 @@ public final class IntegrationRegistry {
         statuses.add(new ExcellentEconomyIntegration(
                 settings.economyProvider().equalsIgnoreCase("ExcellentEconomy"),
                 plugins.isPluginEnabled("ExcellentEconomy"),
+                settings.economyCurrency(),
                 settings.useVaultBridgeForEconomy(),
                 plugins.isPluginEnabled("Vault")
         ).status());

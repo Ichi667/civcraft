@@ -17,6 +17,9 @@ public record ModernCivCraftSettings(
         String startingGovernment,
         double townCost,
         double minTownDistance,
+        double townClaimCost,
+        int maxTownClaims,
+        int maxTownClaimDistanceChunks,
         String storageType,
         String sqliteFile,
         boolean mythicMobsEnabled,
@@ -26,11 +29,21 @@ public record ModernCivCraftSettings(
         boolean packetEventsEnabled,
         boolean typewriterEnabled,
         String economyProvider,
+        String economyCurrency,
         boolean useVaultBridgeForEconomy,
         String placeholderIdentifier,
         String placeholderEmptyValue,
         int maxStructureBlocksPerTick,
-        int maxDatabaseWritesPerTick
+        int maxDatabaseWritesPerTick,
+        String structureConfigPath,
+        String techConfigPath,
+        double baseBeakersPerMinute,
+        double townBeakersPerMinute,
+        boolean legacyTemplatesEnabled,
+        String legacyTemplateRoot,
+        String legacyDefaultTheme,
+        boolean legacyIncludeAir,
+        String legacyDefaultDirection
 ) {
     public static ModernCivCraftSettings from(FileConfiguration config) {
         return new ModernCivCraftSettings(
@@ -47,6 +60,9 @@ public record ModernCivCraftSettings(
                 config.getString("civ.starting-government", "Tribalism"),
                 config.getDouble("town.cost", 10000.0),
                 config.getDouble("town.min-town-distance", 150.0),
+                config.getDouble("town.claim-cost", 250.0),
+                config.getInt("town.max-claims", 64),
+                config.getInt("town.max-claim-distance-chunks", 8),
                 config.getString("storage.type", "sqlite"),
                 config.getString("storage.sqlite.file", "civcraft.db"),
                 config.getBoolean("integrations.mythicmobs.enabled", true),
@@ -56,11 +72,21 @@ public record ModernCivCraftSettings(
                 config.getBoolean("integrations.packetevents.enabled", false),
                 config.getBoolean("integrations.typewriter.enabled", false),
                 config.getString("integrations.economy.provider", "ExcellentEconomy"),
+                config.getString("integrations.economy.currency", "money"),
                 config.getBoolean("integrations.economy.use-vault-bridge-if-direct-api-unavailable", true),
                 config.getString("integrations.placeholderapi.identifier", "civcraft"),
                 config.getString("placeholders.empty-value", "-"),
                 config.getInt("global.tick-budgets.max-structure-blocks-per-tick", 512),
-                config.getInt("global.tick-budgets.max-database-writes-per-tick", 256)
+                config.getInt("global.tick-budgets.max-database-writes-per-tick", 256),
+                config.getString("structures.config", "civcraft/data/structures.yml"),
+                config.getString("technologies.config", "civcraft/data/techs.yml"),
+                config.getDouble("technologies.base-beakers-per-minute", 1.0),
+                config.getDouble("technologies.town-beakers-per-minute", 0.25),
+                config.getBoolean("legacy-templates.enabled", true),
+                config.getString("legacy-templates.root", "civcraft_data/templates"),
+                config.getString("legacy-templates.default-theme", "default"),
+                config.getBoolean("legacy-templates.include-air", false),
+                config.getString("legacy-templates.default-direction", "north")
         );
     }
 

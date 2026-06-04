@@ -1,0 +1,46 @@
+name: CivCraft
+main: com.avrgaming.civcraft.modern.CivCraftModernPlugin
+version: 2.0.0-SNAPSHOT
+api-version: '1.21'
+authors: [AvRGaming, MineTexas, CivCraft Port Team]
+description: Modern Leaf 1.21.4 playable CivCraft port.
+load: POSTWORLD
+softdepend:
+  - MythicMobs
+  - MMOItems
+  - dynmap
+  - ExcellentEconomy
+  - PlaceholderAPI
+  - FastAsyncWorldEdit
+  - WorldEdit
+  - packetevents
+  - Typewriter
+commands:
+  civcraftmodern:
+    aliases: [civcraft]
+    description: CivCraft diagnostics and admin commands.
+    usage: /<command> [reload|integrations|resident|camp|civ|town]
+    permission: civcraft.use
+  resident:
+    aliases: [res]
+    description: Shows CivCraft resident information.
+    usage: /<command>
+    permission: civcraft.use
+  camp:
+    description: Camp mechanics owned by CivCraft.
+    usage: /<command> [create <name>]
+    permission: civcraft.use
+  civ:
+    description: Civilization mechanics owned by CivCraft.
+    usage: /<command> [create <name>]
+    permission: civcraft.use
+  town:
+    aliases: [t]
+    description: Town mechanics owned by CivCraft.
+    usage: /<command> [create <name>]
+    permission: civcraft.use
+permissions:
+  civcraft.use:
+    default: true
+  civcraft.admin:
+    default: op

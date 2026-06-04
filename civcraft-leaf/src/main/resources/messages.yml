@@ -1,0 +1,6 @@
+prefix: '<gold>[CivCraft]</gold> '
+reload: '<green>Конфигурация CivCraft Leaf перезагружена.</green>'
+integrations-header: '<yellow>Интеграции CivCraft Leaf:</yellow>'
+storage-ready: '<green>Локальное хранилище готово: {path}</green>'
+storage-error: '<red>Ошибка инициализации хранилища: {error}</red>'
+placeholder-not-available: '-'

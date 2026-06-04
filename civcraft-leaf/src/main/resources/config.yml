@@ -1,0 +1,96 @@
+# CivCraft Leaf 1.21.4 configuration foundation.
+# Every gameplay-affecting number should live in YAML, not hard-coded Java.
+
+server:
+  target-core: Leaf
+  require-leaf-runtime: true
+  allow-paper-compatible-dev-runtime: true
+  scheduler-strategy: bukkit-main-thread
+
+global:
+  locale: ru_ru
+  debug: false
+  starting-coins: 250.0
+  tick-budgets:
+    max-structure-blocks-per-tick: 512
+    max-database-writes-per-tick: 256
+    max-dynmap-updates-per-run: 128
+  anti-dupe:
+    lock-timeout-millis: 2500
+    require-main-thread-inventory-mutations: true
+    reject-negative-currency-transfers: true
+
+storage:
+  # Default is local SQLite so a new server can boot without MySQL.
+  # Later can be switched to mysql/postgresql after schema migration is complete.
+  type: sqlite
+  sqlite:
+    file: civcraft.db
+  mysql:
+    host: localhost
+    port: 3306
+    database: civcraft
+    username: civcraft
+    password: change-me
+    pool-size: 10
+
+integrations:
+  mythicmobs:
+    enabled: true
+    required-for-custom-mobs: true
+  mmoitems:
+    enabled: true
+    required-for-custom-items: true
+    civcraft-stat-prefix: CIVCRAFT_
+  dynmap:
+    enabled: true
+    layer-priority:
+      towns: 10
+      culture: 15
+      structures: 20
+  economy:
+    provider: ExcellentEconomy
+    currency: coins
+    use-vault-bridge-if-direct-api-unavailable: true
+  placeholderapi:
+    enabled: true
+    identifier: civcraft
+  worldedit:
+    provider-preference: FAWE_THEN_WORLDEDIT
+    async-paste-max-blocks: 250000
+  packetevents:
+    enabled: false
+    # Keep disabled until a concrete packet-only feature is needed.
+  typewriter:
+    enabled: false
+    # Reserved for future quest/dialogue triggers. Integration is intentionally event-bus based.
+
+camp:
+  hitpoints: 5000
+  regen-rate-per-second: 2
+  firepoints-hours: 24
+  coal-per-firepoint: 4
+  cost: 2500.0
+  raid-length-hours: 2
+
+civ:
+  cost: 0.0
+  starting-government: Tribalism
+
+town:
+  cost: 10000.0
+  plot-cost: 1000.0
+  min-town-distance: 150.0
+  min-enemy-town-distance: 300.0
+  outpost-cost: 5000.0
+  upkeep-per-resident: 500.0
+
+war:
+  enabled: true
+  wartime-length-minutes: 120
+  respawn-time-seconds: 30
+  control-block-respawn-time-seconds: 30
+  upkeep-per-aggressive-war: 3000.0
+
+placeholders:
+  empty-value: '-'

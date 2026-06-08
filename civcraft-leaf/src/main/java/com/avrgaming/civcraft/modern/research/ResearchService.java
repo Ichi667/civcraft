@@ -71,13 +71,17 @@ public final class ResearchService {
             throw new IllegalArgumentException("Эта технология уже изучена.");
         }
         Optional<ResearchProgress> active = storage.researchProgress(civId, definition.beakerCost());
-        if (active.isPresent() && !active.get().techId().equalsIgnoreCase(definition.id())) {
+        if (active.isPresent()) {
             throw new IllegalArgumentException("У цивилизации уже идёт исследование: " + active.get().techId());
         }
         for (String required : definition.requiredTechs()) {
             if (!researched.contains(required.toLowerCase(Locale.ROOT))) {
                 throw new IllegalArgumentException("Не изучена обязательная технология: " + required);
             }
+        }
+        double beakersPerHour = storage.civBeakersPerHour(civId);
+        if (beakersPerHour <= 0.0) {
+            throw new IllegalArgumentException("У цивилизации нет производства колбочек.");
         }
         economy.withdraw(player, definition.coinCost(), "research start " + definition.id());
         try {
@@ -100,8 +104,12 @@ public final class ResearchService {
                     plugin.getLogger().warning("Skipping unknown active CivCraft research: " + research.techId());
                     continue;
                 }
-                double beakers = settings.baseBeakersPerMinute() + (storage.townCount(research.civId()) * settings.townBeakersPerMinute());
-                boolean completed = storage.addResearchBeakers(research.civId(), research.techId(), beakers, definition.beakerCost());
+                double beakersPerHour = storage.civBeakersPerHour(research.civId());
+                if (beakersPerHour <= 0.0) {
+                    continue;
+                }
+                double beakersThisMinute = beakersPerHour / 60.0;
+                boolean completed = storage.addResearchBeakers(research.civId(), research.techId(), beakersThisMinute, definition.beakerCost());
                 if (completed) {
                     plugin.getLogger().info("Civilization #" + research.civId() + " completed technology " + definition.id());
                 }

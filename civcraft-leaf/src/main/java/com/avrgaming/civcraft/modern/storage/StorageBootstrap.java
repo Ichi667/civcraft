@@ -1,6 +1,7 @@
 package com.avrgaming.civcraft.modern.storage;
 
 import com.avrgaming.civcraft.modern.build.BlockPlacement;
+import com.avrgaming.civcraft.modern.build.StructureChunkCoord;
 import com.avrgaming.civcraft.modern.config.ModernCivCraftSettings;
 import com.avrgaming.civcraft.modern.domain.CampRecord;
 import com.avrgaming.civcraft.modern.domain.CivRecord;
@@ -18,6 +19,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -32,6 +34,48 @@ public final class StorageBootstrap implements AutoCloseable {
     private final JavaPlugin plugin;
     private final ModernCivCraftSettings settings;
     private Connection connection;
+
+    public record StructureBuildView(
+            long id,
+            Long townId,
+            String townName,
+            String structureId,
+            String displayName,
+            String status,
+            String world,
+            int x,
+            int y,
+            int z,
+            int chunkX,
+            int chunkZ,
+            long cost,
+            double totalHammers,
+            double hammersPerHour,
+            long startedAt,
+            long finishAt,
+            long createdAt
+    ) {
+        public double progressPercent(long now) {
+            if (status.equalsIgnoreCase("COMPLETE")) {
+                return 100.0;
+            }
+            if (status.equalsIgnoreCase("CANCELLED")) {
+                return 0.0;
+            }
+            if (finishAt <= startedAt || totalHammers <= 0.0) {
+                return 100.0;
+            }
+            double progress = ((now - startedAt) / (double) (finishAt - startedAt)) * 100.0;
+            return Math.max(0.0, Math.min(100.0, progress));
+        }
+
+        public long remainingMillis(long now) {
+            if (status.equalsIgnoreCase("COMPLETE") || status.equalsIgnoreCase("CANCELLED") || finishAt <= now) {
+                return 0L;
+            }
+            return finishAt - now;
+        }
+    }
 
     public StorageBootstrap(JavaPlugin plugin, ModernCivCraftSettings settings) {
         this.plugin = plugin;
@@ -50,16 +94,27 @@ public final class StorageBootstrap implements AutoCloseable {
             Files.createDirectories(dataFolder);
             this.connection = DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
             this.connection.setAutoCommit(true);
+            applySqlitePragmas(connection);
             createBootstrapSchema();
+            migrateBootstrapSchema();
+            normalizeMoneyValues();
             plugin.getLogger().info("Local CivCraft SQLite storage ready: " + databaseFile);
         } catch (IOException | SQLException exception) {
             plugin.getLogger().severe("Unable to initialize local CivCraft storage: " + exception.getMessage());
         }
     }
 
+    private void applySqlitePragmas(Connection target) throws SQLException {
+        try (Statement statement = target.createStatement()) {
+            statement.execute("PRAGMA foreign_keys = ON");
+            statement.execute("PRAGMA busy_timeout = 5000");
+            statement.execute("PRAGMA journal_mode = WAL");
+            statement.execute("PRAGMA synchronous = NORMAL");
+        }
+    }
+
     private void createBootstrapSchema() throws SQLException {
         try (Statement statement = connection.createStatement()) {
-            statement.executeUpdate("PRAGMA foreign_keys = ON");
             statement.executeUpdate("""
                     CREATE TABLE IF NOT EXISTS civcraft_meta (
                         key TEXT PRIMARY KEY,
@@ -70,7 +125,7 @@ public final class StorageBootstrap implements AutoCloseable {
                     CREATE TABLE IF NOT EXISTS residents (
                         uuid TEXT PRIMARY KEY,
                         name TEXT NOT NULL,
-                        coins REAL NOT NULL DEFAULT 0,
+                        coins INTEGER NOT NULL DEFAULT 0,
                         civ_id INTEGER,
                         town_id INTEGER,
                         camp_id INTEGER,
@@ -97,8 +152,9 @@ public final class StorageBootstrap implements AutoCloseable {
                     CREATE TABLE IF NOT EXISTS civilizations (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                        tag TEXT NOT NULL DEFAULT '',
                         leader_uuid TEXT NOT NULL,
-                        coins REAL NOT NULL DEFAULT 0,
+                        coins INTEGER NOT NULL DEFAULT 0,
                         government TEXT NOT NULL,
                         created_at INTEGER NOT NULL,
                         FOREIGN KEY(leader_uuid) REFERENCES residents(uuid) ON DELETE CASCADE
@@ -115,7 +171,11 @@ public final class StorageBootstrap implements AutoCloseable {
                         y INTEGER NOT NULL,
                         z INTEGER NOT NULL,
                         level INTEGER NOT NULL DEFAULT 1,
-                        coins REAL NOT NULL DEFAULT 0,
+                        coins INTEGER NOT NULL DEFAULT 0,
+                        hammers_per_hour REAL NOT NULL DEFAULT 100.0,
+                        beakers_per_hour REAL NOT NULL DEFAULT 0,
+                        money_per_hour REAL NOT NULL DEFAULT 0,
+                        base_happiness INTEGER NOT NULL DEFAULT 0,
                         created_at INTEGER NOT NULL,
                         FOREIGN KEY(civ_id) REFERENCES civilizations(id) ON DELETE CASCADE,
                         FOREIGN KEY(mayor_uuid) REFERENCES residents(uuid) ON DELETE CASCADE
@@ -140,6 +200,7 @@ public final class StorageBootstrap implements AutoCloseable {
                     CREATE TABLE IF NOT EXISTS structure_builds (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         builder_uuid TEXT NOT NULL,
+                        town_id INTEGER,
                         type TEXT NOT NULL,
                         template TEXT NOT NULL,
                         direction TEXT NOT NULL,
@@ -151,12 +212,21 @@ public final class StorageBootstrap implements AutoCloseable {
                         queued_blocks INTEGER NOT NULL,
                         structure_id TEXT,
                         display_name TEXT,
-                        cost REAL NOT NULL DEFAULT 0,
+                        cost INTEGER NOT NULL DEFAULT 0,
                         max_hitpoints INTEGER NOT NULL DEFAULT 1,
+                        total_hammers REAL NOT NULL DEFAULT 0,
+                        hammers_per_hour REAL NOT NULL DEFAULT 0,
+                        production_hammers_per_hour REAL NOT NULL DEFAULT 0,
+                        beakers_per_hour REAL NOT NULL DEFAULT 0,
+                        money_per_hour REAL NOT NULL DEFAULT 0,
+                        happiness INTEGER NOT NULL DEFAULT 0,
+                        started_at INTEGER,
+                        finish_at INTEGER,
                         status TEXT NOT NULL,
                         created_at INTEGER NOT NULL,
                         completed_at INTEGER,
-                        FOREIGN KEY(builder_uuid) REFERENCES residents(uuid) ON DELETE CASCADE
+                        FOREIGN KEY(builder_uuid) REFERENCES residents(uuid) ON DELETE CASCADE,
+                        FOREIGN KEY(town_id) REFERENCES towns(id) ON DELETE CASCADE
                     )
                     """);
             statement.executeUpdate("""
@@ -169,6 +239,19 @@ public final class StorageBootstrap implements AutoCloseable {
                         material TEXT NOT NULL,
                         PRIMARY KEY(world, x, y, z),
                         FOREIGN KEY(build_id) REFERENCES structure_builds(id) ON DELETE CASCADE
+                    )
+                    """);
+            statement.executeUpdate("""
+                    CREATE TABLE IF NOT EXISTS structure_chunks (
+                        world TEXT NOT NULL,
+                        chunk_x INTEGER NOT NULL,
+                        chunk_z INTEGER NOT NULL,
+                        build_id INTEGER NOT NULL,
+                        town_id INTEGER,
+                        created_at INTEGER NOT NULL,
+                        PRIMARY KEY(world, chunk_x, chunk_z),
+                        FOREIGN KEY(build_id) REFERENCES structure_builds(id) ON DELETE CASCADE,
+                        FOREIGN KEY(town_id) REFERENCES towns(id) ON DELETE CASCADE
                     )
                     """);
             statement.executeUpdate("""
@@ -189,12 +272,93 @@ public final class StorageBootstrap implements AutoCloseable {
                         FOREIGN KEY(civ_id) REFERENCES civilizations(id) ON DELETE CASCADE
                     )
                     """);
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_protected_blocks_build ON protected_blocks(build_id)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_structure_chunks_build ON structure_chunks(build_id)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_structure_builds_town ON structure_builds(town_id)");
             statement.executeUpdate("""
                     INSERT INTO civcraft_meta(key, value)
-                    VALUES('schema_version', 'modern-playable-1')
+                    VALUES('schema_version', 'modern-playable-5')
                     ON CONFLICT(key) DO UPDATE SET value = excluded.value
                     """);
         }
+    }
+
+    private void migrateBootstrapSchema() throws SQLException {
+        addColumnIfMissing("civilizations", "tag", "TEXT NOT NULL DEFAULT ''");
+        addColumnIfMissing("towns", "hammers_per_hour", "REAL NOT NULL DEFAULT 100.0");
+        addColumnIfMissing("towns", "beakers_per_hour", "REAL NOT NULL DEFAULT 0");
+        addColumnIfMissing("towns", "money_per_hour", "REAL NOT NULL DEFAULT 0");
+        addColumnIfMissing("towns", "base_happiness", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("structure_builds", "town_id", "INTEGER");
+        addColumnIfMissing("structure_builds", "total_hammers", "REAL NOT NULL DEFAULT 0");
+        addColumnIfMissing("structure_builds", "hammers_per_hour", "REAL NOT NULL DEFAULT 0");
+        addColumnIfMissing("structure_builds", "production_hammers_per_hour", "REAL NOT NULL DEFAULT 0");
+        addColumnIfMissing("structure_builds", "beakers_per_hour", "REAL NOT NULL DEFAULT 0");
+        addColumnIfMissing("structure_builds", "money_per_hour", "REAL NOT NULL DEFAULT 0");
+        addColumnIfMissing("structure_builds", "happiness", "INTEGER NOT NULL DEFAULT 0");
+        addColumnIfMissing("structure_builds", "started_at", "INTEGER");
+        addColumnIfMissing("structure_builds", "finish_at", "INTEGER");
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("""
+                    CREATE TABLE IF NOT EXISTS structure_chunks (
+                        world TEXT NOT NULL,
+                        chunk_x INTEGER NOT NULL,
+                        chunk_z INTEGER NOT NULL,
+                        build_id INTEGER NOT NULL,
+                        town_id INTEGER,
+                        created_at INTEGER NOT NULL,
+                        PRIMARY KEY(world, chunk_x, chunk_z),
+                        FOREIGN KEY(build_id) REFERENCES structure_builds(id) ON DELETE CASCADE,
+                        FOREIGN KEY(town_id) REFERENCES towns(id) ON DELETE CASCADE
+                    )
+                    """);
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_structure_chunks_build ON structure_chunks(build_id)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_structure_builds_town ON structure_builds(town_id)");
+        }
+    }
+
+    private void addColumnIfMissing(String table, String column, String definition) throws SQLException {
+        if (hasColumn(table, column)) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+        }
+    }
+
+    private boolean hasColumn(String table, String column) throws SQLException {
+        try (Statement statement = connection.createStatement(); ResultSet rs = statement.executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (rs.next()) {
+                if (column.equalsIgnoreCase(rs.getString("name"))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void normalizeMoneyValues() throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("UPDATE residents SET coins = CAST(ROUND(coins) AS INTEGER)");
+            statement.executeUpdate("UPDATE civilizations SET coins = CAST(ROUND(coins) AS INTEGER)");
+            statement.executeUpdate("UPDATE towns SET coins = CAST(ROUND(coins) AS INTEGER)");
+            statement.executeUpdate("UPDATE structure_builds SET cost = CAST(ROUND(cost) AS INTEGER)");
+        }
+    }
+
+    public void warmupAsync() {
+        if (connection == null) {
+            return;
+        }
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            Path databaseFile = settings.sqlitePath(plugin.getDataFolder().toPath());
+            try (Connection warmup = DriverManager.getConnection("jdbc:sqlite:" + databaseFile); Statement statement = warmup.createStatement()) {
+                applySqlitePragmas(warmup);
+                statement.executeQuery("SELECT 1").close();
+            } catch (SQLException exception) {
+                plugin.getLogger().warning("CivCraft SQLite warmup failed: " + exception.getMessage());
+            }
+        });
     }
 
     public boolean isReady() {
@@ -211,7 +375,7 @@ public final class StorageBootstrap implements AutoCloseable {
         try (PreparedStatement statement = connection.prepareStatement("INSERT INTO residents(uuid, name, coins, created_at, updated_at) VALUES(?, ?, ?, ?, ?)")) {
             statement.setString(1, uuid.toString());
             statement.setString(2, name);
-            statement.setDouble(3, startingCoins);
+            statement.setLong(3, moneyToLong(startingCoins));
             statement.setLong(4, now);
             statement.setLong(5, now);
             statement.executeUpdate();
@@ -258,11 +422,10 @@ public final class StorageBootstrap implements AutoCloseable {
         }
     }
 
-
     public void depositTown(long townId, double amount) throws SQLException {
-        validateMoney(amount);
+        long money = moneyToLong(amount);
         try (PreparedStatement statement = connection.prepareStatement("UPDATE towns SET coins = coins + ? WHERE id = ?")) {
-            statement.setDouble(1, amount);
+            statement.setLong(1, money);
             statement.setLong(2, townId);
             if (statement.executeUpdate() == 0) {
                 throw new SQLException("Town does not exist: " + townId);
@@ -271,19 +434,19 @@ public final class StorageBootstrap implements AutoCloseable {
     }
 
     public void withdrawTown(long townId, double amount) throws SQLException {
-        validateMoney(amount);
+        long money = moneyToLong(amount);
         connection.setAutoCommit(false);
         try {
             try (PreparedStatement check = connection.prepareStatement("SELECT coins FROM towns WHERE id = ?")) {
                 check.setLong(1, townId);
                 try (ResultSet rs = check.executeQuery()) {
-                    if (!rs.next() || rs.getDouble("coins") < amount) {
+                    if (!rs.next() || rs.getLong("coins") < money) {
                         throw new SQLException("Town does not have enough coins");
                     }
                 }
             }
             try (PreparedStatement statement = connection.prepareStatement("UPDATE towns SET coins = coins - ? WHERE id = ?")) {
-                statement.setDouble(1, amount);
+                statement.setLong(1, money);
                 statement.setLong(2, townId);
                 statement.executeUpdate();
             }
@@ -297,9 +460,9 @@ public final class StorageBootstrap implements AutoCloseable {
     }
 
     public void depositCiv(long civId, double amount) throws SQLException {
-        validateMoney(amount);
+        long money = moneyToLong(amount);
         try (PreparedStatement statement = connection.prepareStatement("UPDATE civilizations SET coins = coins + ? WHERE id = ?")) {
-            statement.setDouble(1, amount);
+            statement.setLong(1, money);
             statement.setLong(2, civId);
             if (statement.executeUpdate() == 0) {
                 throw new SQLException("Civilization does not exist: " + civId);
@@ -308,19 +471,19 @@ public final class StorageBootstrap implements AutoCloseable {
     }
 
     public void withdrawCiv(long civId, double amount) throws SQLException {
-        validateMoney(amount);
+        long money = moneyToLong(amount);
         connection.setAutoCommit(false);
         try {
             try (PreparedStatement check = connection.prepareStatement("SELECT coins FROM civilizations WHERE id = ?")) {
                 check.setLong(1, civId);
                 try (ResultSet rs = check.executeQuery()) {
-                    if (!rs.next() || rs.getDouble("coins") < amount) {
+                    if (!rs.next() || rs.getLong("coins") < money) {
                         throw new SQLException("Civilization does not have enough coins");
                     }
                 }
             }
             try (PreparedStatement statement = connection.prepareStatement("UPDATE civilizations SET coins = coins - ? WHERE id = ?")) {
-                statement.setDouble(1, amount);
+                statement.setLong(1, money);
                 statement.setLong(2, civId);
                 statement.executeUpdate();
             }
@@ -390,16 +553,21 @@ public final class StorageBootstrap implements AutoCloseable {
     }
 
     public CivRecord createCivilization(UUID leader, String name, double cost, String government) throws SQLException {
+        return createCivilization(leader, name, "", cost, government);
+    }
+
+    public CivRecord createCivilization(UUID leader, String name, String tag, double cost, String government) throws SQLException {
         connection.setAutoCommit(false);
         try {
             withdrawResident(leader, cost);
             long now = System.currentTimeMillis();
             long civId;
-            try (PreparedStatement statement = connection.prepareStatement("INSERT INTO civilizations(name, leader_uuid, government, created_at) VALUES(?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
+            try (PreparedStatement statement = connection.prepareStatement("INSERT INTO civilizations(name, tag, leader_uuid, government, created_at) VALUES(?, ?, ?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
                 statement.setString(1, name);
-                statement.setString(2, leader.toString());
-                statement.setString(3, government);
-                statement.setLong(4, now);
+                statement.setString(2, tag == null ? "" : tag.toUpperCase(java.util.Locale.ROOT));
+                statement.setString(3, leader.toString());
+                statement.setString(4, government);
+                statement.setLong(5, now);
                 statement.executeUpdate();
                 civId = generatedId(statement);
             }
@@ -419,15 +587,15 @@ public final class StorageBootstrap implements AutoCloseable {
         }
     }
 
-    public TownRecord createTown(UUID mayor, long civId, String name, Location location, double cost) throws SQLException {
+    public TownRecord createTown(UUID mayor, long civId, String name, Location location, double cost, double hammersPerHour) throws SQLException {
         connection.setAutoCommit(false);
         try {
             withdrawResident(mayor, cost);
             long now = System.currentTimeMillis();
             long townId;
             try (PreparedStatement statement = connection.prepareStatement("""
-                    INSERT INTO towns(name, civ_id, mayor_uuid, world, x, y, z, created_at)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO towns(name, civ_id, mayor_uuid, world, x, y, z, hammers_per_hour, created_at)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, Statement.RETURN_GENERATED_KEYS)) {
                 statement.setString(1, name);
                 statement.setLong(2, civId);
@@ -436,7 +604,8 @@ public final class StorageBootstrap implements AutoCloseable {
                 statement.setInt(5, location.getBlockX());
                 statement.setInt(6, location.getBlockY());
                 statement.setInt(7, location.getBlockZ());
-                statement.setLong(8, now);
+                statement.setDouble(8, Math.max(0.0, hammersPerHour));
+                statement.setLong(9, now);
                 statement.executeUpdate();
                 townId = generatedId(statement);
             }
@@ -455,8 +624,6 @@ public final class StorageBootstrap implements AutoCloseable {
             connection.setAutoCommit(true);
         }
     }
-
-
 
     public Optional<TownClaimRecord> findTownClaim(String world, int chunkX, int chunkZ) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("SELECT * FROM town_claims WHERE world = ? AND chunk_x = ? AND chunk_z = ?")) {
@@ -528,41 +695,244 @@ public final class StorageBootstrap implements AutoCloseable {
         }
     }
 
-    public long recordStructureBuild(UUID builder, String type, String template, String direction, Location origin, String templatePath, int queuedBlocks, String structureId, String displayName, double cost, int maxHitpoints) throws SQLException {
+    public long recordStructureBuild(UUID builder, Long townId, String type, String template, String direction, Location origin, String templatePath, int queuedBlocks, String structureId, String displayName, double cost, int maxHitpoints, double totalHammers, double hammersPerHour, double productionHammersPerHour, double beakersPerHour, double moneyPerHour, int happiness, long startedAt, long finishAt) throws SQLException {
         long now = System.currentTimeMillis();
         try (PreparedStatement statement = connection.prepareStatement("""
-                INSERT INTO structure_builds(builder_uuid, type, template, direction, world, x, y, z, template_path, queued_blocks, structure_id, display_name, cost, max_hitpoints, status, created_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?)
+                INSERT INTO structure_builds(builder_uuid, town_id, type, template, direction, world, x, y, z, template_path, queued_blocks, structure_id, display_name, cost, max_hitpoints, total_hammers, hammers_per_hour, production_hammers_per_hour, beakers_per_hour, money_per_hour, happiness, started_at, finish_at, status, created_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?)
                 """, Statement.RETURN_GENERATED_KEYS)) {
             statement.setString(1, builder.toString());
-            statement.setString(2, type);
-            statement.setString(3, template);
-            statement.setString(4, direction);
-            statement.setString(5, origin.getWorld().getName());
-            statement.setInt(6, origin.getBlockX());
-            statement.setInt(7, origin.getBlockY());
-            statement.setInt(8, origin.getBlockZ());
-            statement.setString(9, templatePath);
-            statement.setInt(10, queuedBlocks);
-            statement.setString(11, structureId);
-            statement.setString(12, displayName);
-            statement.setDouble(13, cost);
-            statement.setInt(14, maxHitpoints);
-            statement.setLong(15, now);
+            if (townId == null) {
+                statement.setNull(2, Types.INTEGER);
+            } else {
+                statement.setLong(2, townId);
+            }
+            statement.setString(3, type);
+            statement.setString(4, template);
+            statement.setString(5, direction);
+            statement.setString(6, origin.getWorld().getName());
+            statement.setInt(7, origin.getBlockX());
+            statement.setInt(8, origin.getBlockY());
+            statement.setInt(9, origin.getBlockZ());
+            statement.setString(10, templatePath);
+            statement.setInt(11, queuedBlocks);
+            statement.setString(12, structureId);
+            statement.setString(13, displayName);
+            statement.setLong(14, moneyToLong(cost));
+            statement.setInt(15, maxHitpoints);
+            statement.setDouble(16, Math.max(0.0, totalHammers));
+            statement.setDouble(17, Math.max(0.0, hammersPerHour));
+            statement.setDouble(18, Math.max(0.0, productionHammersPerHour));
+            statement.setDouble(19, Math.max(0.0, beakersPerHour));
+            statement.setDouble(20, Math.max(0.0, moneyPerHour));
+            statement.setInt(21, Math.max(-5, Math.min(5, happiness)));
+            statement.setLong(22, startedAt);
+            statement.setLong(23, finishAt);
+            statement.setLong(24, now);
             statement.executeUpdate();
             return generatedId(statement);
         }
     }
 
+    public boolean hasStructureChunkOverlap(Collection<StructureChunkCoord> chunks) throws SQLException {
+        if (chunks == null || chunks.isEmpty()) {
+            return false;
+        }
+        try (PreparedStatement statement = connection.prepareStatement("SELECT build_id FROM structure_chunks WHERE world = ? AND chunk_x = ? AND chunk_z = ? LIMIT 1")) {
+            for (StructureChunkCoord chunk : chunks) {
+                statement.setString(1, chunk.world());
+                statement.setInt(2, chunk.chunkX());
+                statement.setInt(3, chunk.chunkZ());
+                try (ResultSet rs = statement.executeQuery()) {
+                    if (rs.next()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    public boolean hasActiveStructureBuild(long townId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT 1 FROM structure_builds
+                WHERE town_id = ? AND status NOT IN ('COMPLETE', 'CANCELLED')
+                LIMIT 1
+                """)) {
+            statement.setLong(1, townId);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    public Optional<StructureBuildView> findActiveStructureBuildForTown(long townId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT sb.*, t.name AS town_name
+                FROM structure_builds sb
+                LEFT JOIN towns t ON t.id = sb.town_id
+                WHERE sb.town_id = ? AND sb.status NOT IN ('COMPLETE', 'CANCELLED')
+                ORDER BY sb.created_at DESC
+                LIMIT 1
+                """)) {
+            statement.setLong(1, townId);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() ? Optional.of(mapStructureBuildView(rs, null, null)) : Optional.empty();
+            }
+        }
+    }
+
+    public Optional<StructureBuildView> findStructureBuildAtChunk(String world, int chunkX, int chunkZ) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT sb.*, t.name AS town_name, sc.chunk_x AS info_chunk_x, sc.chunk_z AS info_chunk_z
+                FROM structure_chunks sc
+                JOIN structure_builds sb ON sb.id = sc.build_id
+                LEFT JOIN towns t ON t.id = sb.town_id
+                WHERE sc.world = ? AND sc.chunk_x = ? AND sc.chunk_z = ?
+                ORDER BY sb.created_at DESC
+                LIMIT 1
+                """)) {
+            statement.setString(1, world);
+            statement.setInt(2, chunkX);
+            statement.setInt(3, chunkZ);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() ? Optional.of(mapStructureBuildView(rs, chunkX, chunkZ)) : Optional.empty();
+            }
+        }
+    }
+
+    public void cancelStructureBuild(long buildId) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM protected_blocks WHERE build_id = ?")) {
+                statement.setLong(1, buildId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM structure_chunks WHERE build_id = ?")) {
+                statement.setLong(1, buildId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("UPDATE structure_builds SET status = 'CANCELLED', completed_at = ? WHERE id = ? AND status NOT IN ('COMPLETE', 'CANCELLED')")) {
+                statement.setLong(1, System.currentTimeMillis());
+                statement.setLong(2, buildId);
+                statement.executeUpdate();
+            }
+            connection.commit();
+        } catch (SQLException exception) {
+            connection.rollback();
+            throw exception;
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+
+    public void recordStructureChunks(long buildId, Long townId, Collection<StructureChunkCoord> chunks) throws SQLException {
+        if (chunks == null || chunks.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO structure_chunks(world, chunk_x, chunk_z, build_id, town_id, created_at)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """)) {
+            for (StructureChunkCoord chunk : chunks) {
+                statement.setString(1, chunk.world());
+                statement.setInt(2, chunk.chunkX());
+                statement.setInt(3, chunk.chunkZ());
+                statement.setLong(4, buildId);
+                if (townId == null) {
+                    statement.setNull(5, Types.INTEGER);
+                } else {
+                    statement.setLong(5, townId);
+                }
+                statement.setLong(6, now);
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
+    }
+
     public void completeStructureBuild(long id) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("UPDATE structure_builds SET status = 'COMPLETE', completed_at = ? WHERE id = ?")) {
+        try (PreparedStatement statement = connection.prepareStatement("UPDATE structure_builds SET status = 'COMPLETE', completed_at = ? WHERE id = ? AND status <> 'CANCELLED'")) {
             statement.setLong(1, System.currentTimeMillis());
             statement.setLong(2, id);
             statement.executeUpdate();
         }
     }
 
+    public void recordProtectedBlocks(long buildId, Collection<BlockPlacement> placements) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT OR REPLACE INTO protected_blocks(world, x, y, z, build_id, material)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """)) {
+            for (BlockPlacement placement : placements) {
+                statement.setString(1, placement.world());
+                statement.setInt(2, placement.x());
+                statement.setInt(3, placement.y());
+                statement.setInt(4, placement.z());
+                statement.setLong(5, buildId);
+                statement.setString(6, placement.material());
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
+    }
 
+    public void recordProtectedBlocksAndCompleteBuild(long buildId, Collection<BlockPlacement> placements) throws SQLException {
+        Path databaseFile = settings.sqlitePath(plugin.getDataFolder().toPath());
+        try (Connection writeConnection = DriverManager.getConnection("jdbc:sqlite:" + databaseFile)) {
+            applySqlitePragmas(writeConnection);
+            writeConnection.setAutoCommit(false);
+            try (
+                    PreparedStatement insert = writeConnection.prepareStatement("""
+                            INSERT OR REPLACE INTO protected_blocks(world, x, y, z, build_id, material)
+                            VALUES(?, ?, ?, ?, ?, ?)
+                            """);
+                    PreparedStatement complete = writeConnection.prepareStatement("UPDATE structure_builds SET status = 'COMPLETE', completed_at = ? WHERE id = ? AND status <> 'CANCELLED'")
+            ) {
+                int batchSize = Math.max(1, settings.maxDatabaseWritesPerTick());
+                int pending = 0;
+                for (BlockPlacement placement : placements) {
+                    insert.setString(1, placement.world());
+                    insert.setInt(2, placement.x());
+                    insert.setInt(3, placement.y());
+                    insert.setInt(4, placement.z());
+                    insert.setLong(5, buildId);
+                    insert.setString(6, placement.material());
+                    insert.addBatch();
+                    pending++;
+                    if (pending >= batchSize) {
+                        insert.executeBatch();
+                        pending = 0;
+                    }
+                }
+                if (pending > 0) {
+                    insert.executeBatch();
+                }
+                complete.setLong(1, System.currentTimeMillis());
+                complete.setLong(2, buildId);
+                complete.executeUpdate();
+                writeConnection.commit();
+            } catch (SQLException exception) {
+                writeConnection.rollback();
+                throw exception;
+            } finally {
+                writeConnection.setAutoCommit(true);
+            }
+        }
+    }
+
+    public boolean isProtectedBlock(String world, int x, int y, int z) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM protected_blocks WHERE world = ? AND x = ? AND y = ? AND z = ?")) {
+            statement.setString(1, world);
+            statement.setInt(2, x);
+            statement.setInt(3, y);
+            statement.setInt(4, z);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
 
     public Set<String> researchedTechs(long civId) throws SQLException {
         Set<String> techs = new HashSet<>();
@@ -663,6 +1033,128 @@ public final class StorageBootstrap implements AutoCloseable {
         }
     }
 
+
+    public double civBeakersPerHour(long civId) throws SQLException {
+        List<TownBaseProduction> towns = townBaseProductions(civId);
+        double total = 0.0;
+        for (TownBaseProduction town : towns) {
+            total += townProduction(town.id(), town.baseHammersPerHour(), town.baseBeakersPerHour(), town.baseMoneyPerHour(), town.baseHappiness()).beakersPerHour();
+        }
+        return total;
+    }
+
+    public double civMoneyPerHour(long civId) throws SQLException {
+        List<TownBaseProduction> towns = townBaseProductions(civId);
+        double total = 0.0;
+        for (TownBaseProduction town : towns) {
+            total += townProduction(town.id(), town.baseHammersPerHour(), town.baseBeakersPerHour(), town.baseMoneyPerHour(), town.baseHappiness()).moneyPerHour();
+        }
+        return total;
+    }
+
+    private List<TownBaseProduction> townBaseProductions(long civId) throws SQLException {
+        List<TownBaseProduction> towns = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement("SELECT id, hammers_per_hour, beakers_per_hour, money_per_hour, base_happiness FROM towns WHERE civ_id = ?")) {
+            statement.setLong(1, civId);
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next()) {
+                    towns.add(new TownBaseProduction(rs.getLong("id"), rs.getDouble("hammers_per_hour"), rs.getDouble("beakers_per_hour"), rs.getDouble("money_per_hour"), rs.getInt("base_happiness")));
+                }
+            }
+        }
+        return towns;
+    }
+
+    private TownProduction townProduction(long townId, double baseHammersPerHour, double baseBeakersPerHour, double baseMoneyPerHour, int baseHappiness) throws SQLException {
+        double structureHammers = 0.0;
+        double beakers = 0.0;
+        double money = 0.0;
+        int structureHappiness = 0;
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT
+                    COALESCE(SUM(production_hammers_per_hour), 0) AS hammers,
+                    COALESCE(SUM(beakers_per_hour), 0) AS beakers,
+                    COALESCE(SUM(money_per_hour), 0) AS money,
+                    COALESCE(SUM(happiness), 0) AS happiness
+                FROM structure_builds
+                WHERE town_id = ? AND status = 'COMPLETE'
+                """)) {
+            statement.setLong(1, townId);
+            try (ResultSet rs = statement.executeQuery()) {
+                if (rs.next()) {
+                    structureHammers = rs.getDouble("hammers");
+                    beakers = rs.getDouble("beakers");
+                    money = rs.getDouble("money");
+                    structureHappiness = rs.getInt("happiness");
+                }
+            }
+        }
+        int happiness = clampHappiness(baseHappiness + structureHappiness);
+        double multiplier = happinessMultiplier(happiness);
+        return new TownProduction(
+                (Math.max(0.0, baseHammersPerHour) + Math.max(0.0, structureHammers)) * multiplier,
+                (Math.max(0.0, baseBeakersPerHour) + Math.max(0.0, beakers)) * multiplier,
+                (Math.max(0.0, baseMoneyPerHour) + Math.max(0.0, money)) * multiplier,
+                happiness,
+                happinessState(happiness),
+                multiplier
+        );
+    }
+
+    private int clampHappiness(int value) {
+        return Math.max(-5, Math.min(5, value));
+    }
+
+    private double happinessMultiplier(int happiness) {
+        if (happiness <= -5) {
+            return 0.50;
+        }
+        if (happiness <= -3) {
+            return 0.65;
+        }
+        if (happiness <= -1) {
+            return 0.85;
+        }
+        if (happiness == 0) {
+            return 1.00;
+        }
+        if (happiness <= 2) {
+            return 1.15;
+        }
+        if (happiness <= 4) {
+            return 1.35;
+        }
+        return 1.60;
+    }
+
+    private String happinessState(int happiness) {
+        if (happiness <= -5) {
+            return "Бунт";
+        }
+        if (happiness <= -3) {
+            return "Недовольство";
+        }
+        if (happiness <= -1) {
+            return "Несчастье";
+        }
+        if (happiness == 0) {
+            return "Обычное состояние";
+        }
+        if (happiness <= 2) {
+            return "Счастливые";
+        }
+        if (happiness <= 4) {
+            return "Ликование";
+        }
+        return "Экстаз";
+    }
+
+    private record TownBaseProduction(long id, double baseHammersPerHour, double baseBeakersPerHour, double baseMoneyPerHour, int baseHappiness) {
+    }
+
+    private record TownProduction(double hammersPerHour, double beakersPerHour, double moneyPerHour, int happiness, String state, double multiplier) {
+    }
+
     public int townCount(long civId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("SELECT COUNT(*) AS count FROM towns WHERE civ_id = ?")) {
             statement.setLong(1, civId);
@@ -709,45 +1201,13 @@ public final class StorageBootstrap implements AutoCloseable {
     }
 
     public void depositResident(UUID uuid, double amount) throws SQLException {
-        if (amount < 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
-            throw new SQLException("Invalid amount: " + amount);
-        }
+        long money = moneyToLong(amount);
         try (PreparedStatement statement = connection.prepareStatement("UPDATE residents SET coins = coins + ?, updated_at = ? WHERE uuid = ?")) {
-            statement.setDouble(1, amount);
+            statement.setLong(1, money);
             statement.setLong(2, System.currentTimeMillis());
             statement.setString(3, uuid.toString());
             if (statement.executeUpdate() == 0) {
                 throw new SQLException("Resident does not exist: " + uuid);
-            }
-        }
-    }
-
-    public void recordProtectedBlocks(long buildId, Collection<BlockPlacement> placements) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("""
-                INSERT OR REPLACE INTO protected_blocks(world, x, y, z, build_id, material)
-                VALUES(?, ?, ?, ?, ?, ?)
-                """)) {
-            for (BlockPlacement placement : placements) {
-                statement.setString(1, placement.world());
-                statement.setInt(2, placement.x());
-                statement.setInt(3, placement.y());
-                statement.setInt(4, placement.z());
-                statement.setLong(5, buildId);
-                statement.setString(6, placement.material());
-                statement.addBatch();
-            }
-            statement.executeBatch();
-        }
-    }
-
-    public boolean isProtectedBlock(String world, int x, int y, int z) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM protected_blocks WHERE world = ? AND x = ? AND y = ? AND z = ?")) {
-            statement.setString(1, world);
-            statement.setInt(2, x);
-            statement.setInt(3, y);
-            statement.setInt(4, z);
-            try (ResultSet rs = statement.executeQuery()) {
-                return rs.next();
             }
         }
     }
@@ -761,30 +1221,183 @@ public final class StorageBootstrap implements AutoCloseable {
         }
     }
 
+    private long moneyToLong(double amount) throws SQLException {
+        validateMoney(amount);
+        return Math.round(amount);
+    }
 
     private void validateMoney(double amount) throws SQLException {
-        if (amount < 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
-            throw new SQLException("Invalid amount: " + amount);
+        if (amount < 0 || Double.isNaN(amount) || Double.isInfinite(amount) || amount != Math.rint(amount)) {
+            throw new SQLException("Money amount must be a non-negative whole number: " + amount);
         }
     }
 
     private void withdrawResident(UUID uuid, double amount) throws SQLException {
-        if (amount < 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
-            throw new SQLException("Invalid amount: " + amount);
-        }
+        long money = moneyToLong(amount);
         try (PreparedStatement check = connection.prepareStatement("SELECT coins FROM residents WHERE uuid = ?")) {
             check.setString(1, uuid.toString());
             try (ResultSet rs = check.executeQuery()) {
-                if (!rs.next() || rs.getDouble("coins") < amount) {
+                if (!rs.next() || rs.getLong("coins") < money) {
                     throw new SQLException("Not enough coins");
                 }
             }
         }
         try (PreparedStatement statement = connection.prepareStatement("UPDATE residents SET coins = coins - ?, updated_at = ? WHERE uuid = ?")) {
-            statement.setDouble(1, amount);
+            statement.setLong(1, money);
             statement.setLong(2, System.currentTimeMillis());
             statement.setString(3, uuid.toString());
             statement.executeUpdate();
+        }
+    }
+
+
+    public void deleteCamp(long campId, UUID owner) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            try (PreparedStatement statement = connection.prepareStatement("UPDATE residents SET camp_id = NULL, updated_at = ? WHERE uuid = ? AND camp_id = ?")) {
+                statement.setLong(1, System.currentTimeMillis());
+                statement.setString(2, owner.toString());
+                statement.setLong(3, campId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM camps WHERE id = ? AND owner_uuid = ?")) {
+                statement.setLong(1, campId);
+                statement.setString(2, owner.toString());
+                statement.executeUpdate();
+            }
+            connection.commit();
+        } catch (SQLException exception) {
+            connection.rollback();
+            throw exception;
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+
+    public void deleteTown(long townId, UUID mayor) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM structure_chunks WHERE town_id = ?")) {
+                statement.setLong(1, townId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM protected_blocks WHERE build_id IN (SELECT id FROM structure_builds WHERE town_id = ?)")) {
+                statement.setLong(1, townId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM structure_builds WHERE town_id = ?")) {
+                statement.setLong(1, townId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM town_claims WHERE town_id = ?")) {
+                statement.setLong(1, townId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("UPDATE residents SET town_id = NULL, updated_at = ? WHERE uuid = ? AND town_id = ?")) {
+                statement.setLong(1, System.currentTimeMillis());
+                statement.setString(2, mayor.toString());
+                statement.setLong(3, townId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM towns WHERE id = ? AND mayor_uuid = ?")) {
+                statement.setLong(1, townId);
+                statement.setString(2, mayor.toString());
+                statement.executeUpdate();
+            }
+            connection.commit();
+        } catch (SQLException exception) {
+            connection.rollback();
+            throw exception;
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+
+    public void deleteCivilization(long civId, UUID leader) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            try (PreparedStatement townSelect = connection.prepareStatement("SELECT id FROM towns WHERE civ_id = ?")) {
+                townSelect.setLong(1, civId);
+                try (ResultSet rs = townSelect.executeQuery()) {
+                    while (rs.next()) {
+                        long townId = rs.getLong("id");
+                        try (PreparedStatement statement = connection.prepareStatement("DELETE FROM structure_chunks WHERE town_id = ?")) {
+                            statement.setLong(1, townId);
+                            statement.executeUpdate();
+                        }
+                        try (PreparedStatement statement = connection.prepareStatement("DELETE FROM protected_blocks WHERE build_id IN (SELECT id FROM structure_builds WHERE town_id = ?)")) {
+                            statement.setLong(1, townId);
+                            statement.executeUpdate();
+                        }
+                        try (PreparedStatement statement = connection.prepareStatement("DELETE FROM structure_builds WHERE town_id = ?")) {
+                            statement.setLong(1, townId);
+                            statement.executeUpdate();
+                        }
+                    }
+                }
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM town_claims WHERE civ_id = ?")) {
+                statement.setLong(1, civId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("UPDATE residents SET town_id = NULL, updated_at = ? WHERE civ_id = ?")) {
+                statement.setLong(1, System.currentTimeMillis());
+                statement.setLong(2, civId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM towns WHERE civ_id = ?")) {
+                statement.setLong(1, civId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM civ_research WHERE civ_id = ?")) {
+                statement.setLong(1, civId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM civ_technologies WHERE civ_id = ?")) {
+                statement.setLong(1, civId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("UPDATE residents SET civ_id = NULL, updated_at = ? WHERE uuid = ? AND civ_id = ?")) {
+                statement.setLong(1, System.currentTimeMillis());
+                statement.setString(2, leader.toString());
+                statement.setLong(3, civId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM civilizations WHERE id = ? AND leader_uuid = ?")) {
+                statement.setLong(1, civId);
+                statement.setString(2, leader.toString());
+                statement.executeUpdate();
+            }
+            connection.commit();
+        } catch (SQLException exception) {
+            connection.rollback();
+            throw exception;
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+
+    public void deleteStructureBuild(long buildId) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM structure_chunks WHERE build_id = ?")) {
+                statement.setLong(1, buildId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM protected_blocks WHERE build_id = ?")) {
+                statement.setLong(1, buildId);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM structure_builds WHERE id = ?")) {
+                statement.setLong(1, buildId);
+                statement.executeUpdate();
+            }
+            connection.commit();
+        } catch (SQLException exception) {
+            connection.rollback();
+            throw exception;
+        } finally {
+            connection.setAutoCommit(true);
         }
     }
 
@@ -801,7 +1414,7 @@ public final class StorageBootstrap implements AutoCloseable {
         return new ResidentProfile(
                 UUID.fromString(rs.getString("uuid")),
                 rs.getString("name"),
-                rs.getDouble("coins"),
+                rs.getLong("coins"),
                 nullableLong(rs, "civ_id"),
                 nullableLong(rs, "town_id"),
                 nullableLong(rs, "camp_id")
@@ -823,9 +1436,8 @@ public final class StorageBootstrap implements AutoCloseable {
     }
 
     private CivRecord mapCiv(ResultSet rs) throws SQLException {
-        return new CivRecord(rs.getLong("id"), rs.getString("name"), UUID.fromString(rs.getString("leader_uuid")), rs.getDouble("coins"), rs.getString("government"));
+        return new CivRecord(rs.getLong("id"), rs.getString("name"), rs.getString("tag"), UUID.fromString(rs.getString("leader_uuid")), rs.getLong("coins"), rs.getString("government"));
     }
-
 
     private TownClaimRecord mapTownClaim(ResultSet rs) throws SQLException {
         return new TownClaimRecord(
@@ -840,7 +1452,57 @@ public final class StorageBootstrap implements AutoCloseable {
     }
 
     private TownRecord mapTown(ResultSet rs) throws SQLException {
-        return new TownRecord(rs.getLong("id"), rs.getString("name"), rs.getLong("civ_id"), UUID.fromString(rs.getString("mayor_uuid")), rs.getString("world"), rs.getInt("x"), rs.getInt("y"), rs.getInt("z"), rs.getInt("level"), rs.getDouble("coins"));
+        long townId = rs.getLong("id");
+        TownProduction production = townProduction(townId, rs.getDouble("hammers_per_hour"), rs.getDouble("beakers_per_hour"), rs.getDouble("money_per_hour"), rs.getInt("base_happiness"));
+        return new TownRecord(
+                townId,
+                rs.getString("name"),
+                rs.getLong("civ_id"),
+                UUID.fromString(rs.getString("mayor_uuid")),
+                rs.getString("world"),
+                rs.getInt("x"),
+                rs.getInt("y"),
+                rs.getInt("z"),
+                rs.getInt("level"),
+                rs.getLong("coins"),
+                production.hammersPerHour(),
+                production.beakersPerHour(),
+                production.moneyPerHour(),
+                production.happiness(),
+                production.state(),
+                production.multiplier()
+        );
+    }
+
+    private StructureBuildView mapStructureBuildView(ResultSet rs, Integer infoChunkX, Integer infoChunkZ) throws SQLException {
+        Long townId = nullableLong(rs, "town_id");
+        String structureId = rs.getString("structure_id");
+        String displayName = rs.getString("display_name");
+        if (displayName == null || displayName.isBlank()) {
+            displayName = structureId == null || structureId.isBlank() ? rs.getString("template") : structureId;
+        }
+        int chunkX = infoChunkX == null ? Math.floorDiv(rs.getInt("x"), 16) : infoChunkX;
+        int chunkZ = infoChunkZ == null ? Math.floorDiv(rs.getInt("z"), 16) : infoChunkZ;
+        return new StructureBuildView(
+                rs.getLong("id"),
+                townId,
+                rs.getString("town_name"),
+                structureId,
+                displayName,
+                rs.getString("status"),
+                rs.getString("world"),
+                rs.getInt("x"),
+                rs.getInt("y"),
+                rs.getInt("z"),
+                chunkX,
+                chunkZ,
+                rs.getLong("cost"),
+                rs.getDouble("total_hammers"),
+                rs.getDouble("hammers_per_hour"),
+                rs.getLong("started_at"),
+                rs.getLong("finish_at"),
+                rs.getLong("created_at")
+        );
     }
 
     private Long nullableLong(ResultSet rs, String column) throws SQLException {

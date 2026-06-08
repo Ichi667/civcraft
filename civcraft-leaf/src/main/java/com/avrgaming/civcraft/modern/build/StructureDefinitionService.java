@@ -48,6 +48,10 @@ public final class StructureDefinitionService {
                     number(raw.get("cost"), 0.0),
                     number(raw.get("upkeep"), 0.0),
                     number(raw.get("hammer_cost"), 0.0),
+                    number(raw.get("hammers_per_hour"), 0.0),
+                    number(raw.get("beakers_per_hour"), 0.0),
+                    number(raw.get("money_per_hour"), 0.0),
+                    happiness(raw, id),
                     (int) number(raw.get("max_hitpoints"), 1.0),
                     string(raw.get("require_tech")),
                     Boolean.parseBoolean(String.valueOf(raw.containsKey("strategic") ? raw.get("strategic") : false))
@@ -66,6 +70,20 @@ public final class StructureDefinitionService {
                 .sorted(Comparator.comparing(StructureDefinition::id))
                 .limit(limit)
                 .toList();
+    }
+
+    private int happiness(Map<?, ?> raw, String id) {
+        if (raw.containsKey("happiness")) {
+            return (int) number(raw.get("happiness"), 0.0);
+        }
+        String normalized = id.toLowerCase(Locale.ROOT);
+        if (normalized.equals("s_townhall") || normalized.equals(settings.townHallStructureId().toLowerCase(Locale.ROOT))) {
+            return 2;
+        }
+        if (normalized.equals("s_capitol") || normalized.equals(settings.capitolStructureId().toLowerCase(Locale.ROOT))) {
+            return 4;
+        }
+        return 0;
     }
 
     private String string(Object value) {

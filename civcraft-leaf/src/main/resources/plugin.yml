@@ -41,9 +41,14 @@ commands:
     usage: /<command> [create <name>]
     permission: civcraft.use
   build:
-    description: Builds legacy CivCraft .def structures.
-    usage: /<command> [list|structure <id> [direction]|legacy <type> <template> [direction]]
+    aliases: [b]
+    description: Shows private structure preview and starts construction after yes.
+    usage: /<command> <structureId> [y] [0|90|180|270]
     permission: civcraft.build
+  civadmin:
+    description: CivCraft admin tools.
+    usage: /<command> build <legacyFile> [y] [0|90|180|270]
+    permission: civcraft.admin
   research:
     aliases: [tech]
     description: Starts and shows civilization technology research.

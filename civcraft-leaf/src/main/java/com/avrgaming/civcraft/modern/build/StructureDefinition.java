@@ -7,6 +7,10 @@ public record StructureDefinition(
         double cost,
         double upkeep,
         double hammerCost,
+        double hammersPerHourBonus,
+        double beakersPerHour,
+        double moneyPerHour,
+        int happiness,
         int maxHitpoints,
         String requiredTechnology,
         boolean strategic

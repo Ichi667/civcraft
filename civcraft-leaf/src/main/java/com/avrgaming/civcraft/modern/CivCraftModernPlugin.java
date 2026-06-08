@@ -2,14 +2,17 @@ package com.avrgaming.civcraft.modern;
 
 import com.avrgaming.civcraft.modern.build.LegacyStructureService;
 import com.avrgaming.civcraft.modern.build.ProtectedBlockListener;
+import com.avrgaming.civcraft.modern.build.StructurePreviewChatListener;
 import com.avrgaming.civcraft.modern.command.CivCraftCommand;
 import com.avrgaming.civcraft.modern.config.ModernCivCraftSettings;
 import com.avrgaming.civcraft.modern.economy.CivCraftEconomyService;
+import com.avrgaming.civcraft.modern.foundation.FoundationItemListener;
 import com.avrgaming.civcraft.modern.integration.IntegrationRegistry;
 import com.avrgaming.civcraft.modern.placeholder.CivCraftPlaceholderExpansion;
 import com.avrgaming.civcraft.modern.research.ResearchService;
 import com.avrgaming.civcraft.modern.service.CivCraftGameService;
 import com.avrgaming.civcraft.modern.service.ResidentJoinListener;
+import com.avrgaming.civcraft.modern.service.TabPrefixService;
 import com.avrgaming.civcraft.modern.service.TownClaimProtectionListener;
 import com.avrgaming.civcraft.modern.service.TownClaimService;
 import com.avrgaming.civcraft.modern.storage.StorageBootstrap;
@@ -27,6 +30,8 @@ public final class CivCraftModernPlugin extends JavaPlugin {
     private ResearchService research;
     private TownClaimService townClaims;
     private CivCraftPlaceholderExpansion placeholderExpansion;
+    private FoundationItemListener foundationItems;
+    private TabPrefixService tabPrefixes;
 
     @Override
     public void onEnable() {
@@ -36,16 +41,21 @@ public final class CivCraftModernPlugin extends JavaPlugin {
         reloadModernConfig();
         this.storage = new StorageBootstrap(this, settings);
         storage.initializeLocalStorage();
+        storage.warmupAsync();
 
         this.economy = new CivCraftEconomyService(this, storage, settings);
         this.game = new CivCraftGameService(storage, settings, economy);
-        this.legacyStructures = new LegacyStructureService(this, storage, settings, economy);
+        this.tabPrefixes = new TabPrefixService(this, game);
+        this.legacyStructures = new LegacyStructureService(this, storage, settings, economy, game);
         this.research = new ResearchService(this, storage, game, settings, economy);
         this.townClaims = new TownClaimService(storage, game, settings, economy);
         getServer().getScheduler().runTaskTimer(this, research::tick, 20L * 60L, 20L * 60L);
-        getServer().getPluginManager().registerEvents(new ResidentJoinListener(this, game), this);
+        getServer().getPluginManager().registerEvents(new ResidentJoinListener(this, game, tabPrefixes), this);
         getServer().getPluginManager().registerEvents(new TownClaimProtectionListener(this, townClaims), this);
         getServer().getPluginManager().registerEvents(new ProtectedBlockListener(this, storage), this);
+        this.foundationItems = new FoundationItemListener(this, game, legacyStructures, tabPrefixes, settings);
+        getServer().getPluginManager().registerEvents(foundationItems, this);
+        getServer().getPluginManager().registerEvents(new StructurePreviewChatListener(this, legacyStructures), this);
 
         this.integrations = new IntegrationRegistry(this, settings);
         integrations.detect();
@@ -56,7 +66,7 @@ public final class CivCraftModernPlugin extends JavaPlugin {
         }
 
         CivCraftCommand executor = new CivCraftCommand(this, game, legacyStructures, research, townClaims, economy);
-        for (String commandName : List.of("civcraftmodern", "resident", "camp", "civ", "town", "build", "research")) {
+        for (String commandName : List.of("civcraftmodern", "resident", "camp", "civ", "town", "build", "civadmin", "research")) {
             var command = getCommand(commandName);
             if (command != null) {
                 command.setExecutor(executor);
@@ -69,6 +79,9 @@ public final class CivCraftModernPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (legacyStructures != null) {
+            legacyStructures.cancelAllPreviews();
+        }
         if (placeholderExpansion != null) {
             placeholderExpansion.unregister();
         }
@@ -80,8 +93,10 @@ public final class CivCraftModernPlugin extends JavaPlugin {
     public void reloadModernConfig() {
         reloadConfig();
         this.settings = ModernCivCraftSettings.from(getConfig());
+        if (foundationItems != null) {
+            foundationItems.updateSettings(settings);
+        }
     }
-
 
     public void reloadIntegrations() {
         this.integrations = new IntegrationRegistry(this, settings);

@@ -48,7 +48,7 @@ public final class CivCraftEconomyService {
 
     public double balance(Player player) throws SQLException {
         if (vaultEconomy != null) {
-            return vaultEconomy.getBalance(player);
+            return Math.rint(vaultEconomy.getBalance(player));
         }
         return storage.getOrCreateResident(player.getUniqueId(), player.getName(), settings.startingCoins()).coins();
     }
@@ -88,8 +88,8 @@ public final class CivCraftEconomyService {
     }
 
     private void validateAmount(double amount) throws SQLException {
-        if (amount < 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
-            throw new SQLException("Invalid economy amount: " + amount);
+        if (amount < 0 || Double.isNaN(amount) || Double.isInfinite(amount) || amount != Math.rint(amount)) {
+            throw new SQLException("Economy amount must be a whole non-negative number: " + amount);
         }
     }
 }

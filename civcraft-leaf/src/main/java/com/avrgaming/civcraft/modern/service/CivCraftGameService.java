@@ -2,13 +2,14 @@ package com.avrgaming.civcraft.modern.service;
 
 import com.avrgaming.civcraft.modern.config.ModernCivCraftSettings;
 import com.avrgaming.civcraft.modern.domain.CampRecord;
-import com.avrgaming.civcraft.modern.economy.CivCraftEconomyService;
 import com.avrgaming.civcraft.modern.domain.CivRecord;
 import com.avrgaming.civcraft.modern.domain.ResidentProfile;
 import com.avrgaming.civcraft.modern.domain.TownRecord;
+import com.avrgaming.civcraft.modern.economy.CivCraftEconomyService;
 import com.avrgaming.civcraft.modern.storage.StorageBootstrap;
 import java.sql.SQLException;
 import java.util.Optional;
+import org.bukkit.Location;
 import org.bukkit.entity.Player;
 
 public final class CivCraftGameService {
@@ -41,7 +42,6 @@ public final class CivCraftGameService {
     public Optional<CampRecord> camp(ResidentProfile resident) throws SQLException {
         return storage.findCampByOwner(resident.uuid());
     }
-
 
     public TownRecord depositTown(Player player, double amount) throws SQLException {
         ResidentProfile resident = resident(player);
@@ -116,8 +116,12 @@ public final class CivCraftGameService {
     }
 
     public CampRecord createCamp(Player player, String name) throws SQLException, IllegalArgumentException {
-        if (!Validation.isValidName(name)) {
-            throw new IllegalArgumentException("Название лагеря должно быть от 3 до 32 символов и без спецсимволов.");
+        return createCampAt(player, name, player.getLocation());
+    }
+
+    public CampRecord createCampAt(Player player, String name, Location location) throws SQLException, IllegalArgumentException {
+        if (!Validation.isValidFoundationName(name)) {
+            throw new IllegalArgumentException("Название лагеря должно быть от 5 до 16 символов и без спецсимволов.");
         }
         ResidentProfile resident = resident(player);
         if (resident.campId() != null || storage.findCampByOwner(player.getUniqueId()).isPresent()) {
@@ -125,7 +129,7 @@ public final class CivCraftGameService {
         }
         economy.withdraw(player, settings.campCost(), "camp create");
         try {
-            return storage.createCamp(player.getUniqueId(), name, player.getLocation(), 0.0, settings.campHitpoints(), settings.campFirepointsHours());
+            return storage.createCamp(player.getUniqueId(), name, location, 0.0, settings.campHitpoints(), settings.campFirepointsHours());
         } catch (SQLException | RuntimeException exception) {
             economy.deposit(player, settings.campCost(), "camp create refund");
             throw exception;
@@ -133,8 +137,15 @@ public final class CivCraftGameService {
     }
 
     public CivRecord createCivilization(Player player, String name) throws SQLException, IllegalArgumentException {
-        if (!Validation.isValidName(name)) {
-            throw new IllegalArgumentException("Название цивилизации должно быть от 3 до 32 символов и без спецсимволов.");
+        return createCivilization(player, name, "");
+    }
+
+    public CivRecord createCivilization(Player player, String name, String tag) throws SQLException, IllegalArgumentException {
+        if (!Validation.isValidFoundationName(name)) {
+            throw new IllegalArgumentException("Название цивилизации должно быть от 5 до 16 символов и без спецсимволов.");
+        }
+        if (!tag.isBlank() && !Validation.isValidCivTag(tag)) {
+            throw new IllegalArgumentException("Тег цивилизации должен быть от 3 до 5 символов и без спецсимволов.");
         }
         ResidentProfile resident = resident(player);
         if (resident.civId() != null) {
@@ -142,7 +153,7 @@ public final class CivCraftGameService {
         }
         economy.withdraw(player, settings.civCost(), "civilization create");
         try {
-            return storage.createCivilization(player.getUniqueId(), name, 0.0, settings.startingGovernment());
+            return storage.createCivilization(player.getUniqueId(), name, tag, 0.0, settings.startingGovernment());
         } catch (SQLException | RuntimeException exception) {
             economy.deposit(player, settings.civCost(), "civilization create refund");
             throw exception;
@@ -150,8 +161,12 @@ public final class CivCraftGameService {
     }
 
     public TownRecord createTown(Player player, String name) throws SQLException, IllegalArgumentException {
-        if (!Validation.isValidName(name)) {
-            throw new IllegalArgumentException("Название города должно быть от 3 до 32 символов и без спецсимволов.");
+        return createTownAt(player, name, player.getLocation());
+    }
+
+    public TownRecord createTownAt(Player player, String name, Location location) throws SQLException, IllegalArgumentException {
+        if (!Validation.isValidFoundationName(name)) {
+            throw new IllegalArgumentException("Название города должно быть от 5 до 16 символов и без спецсимволов.");
         }
         ResidentProfile resident = resident(player);
         if (resident.civId() == null) {
@@ -160,15 +175,38 @@ public final class CivCraftGameService {
         if (resident.townId() != null) {
             throw new IllegalArgumentException("У вас уже есть город.");
         }
-        if (storage.hasTownNear(player.getLocation(), settings.minTownDistance())) {
+        if (storage.hasTownNear(location, settings.minTownDistance())) {
             throw new IllegalArgumentException("Слишком близко к другому городу. Минимальная дистанция: " + settings.minTownDistance());
         }
         economy.withdraw(player, settings.townCost(), "town create");
         try {
-            return storage.createTown(player.getUniqueId(), resident.civId(), name, player.getLocation(), 0.0);
+            return storage.createTown(player.getUniqueId(), resident.civId(), name, location, 0.0, settings.townHammersPerHour());
         } catch (SQLException | RuntimeException exception) {
             economy.deposit(player, settings.townCost(), "town create refund");
             throw exception;
         }
     }
+
+
+    public void rollbackCreatedCamp(Player player, CampRecord camp) throws SQLException {
+        if (camp == null) {
+            return;
+        }
+        storage.deleteCamp(camp.id(), player.getUniqueId());
+    }
+
+    public void rollbackCreatedTown(Player player, TownRecord town) throws SQLException {
+        if (town == null) {
+            return;
+        }
+        storage.deleteTown(town.id(), player.getUniqueId());
+    }
+
+    public void rollbackCreatedCivilization(Player player, CivRecord civ) throws SQLException {
+        if (civ == null) {
+            return;
+        }
+        storage.deleteCivilization(civ.id(), player.getUniqueId());
+    }
+
 }

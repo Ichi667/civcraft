@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -84,7 +85,8 @@ public final class LegacyStructureService {
         String cleanDirection = normalizeRotationDirection(direction);
         Path templatePath = resolveTemplate(cleanType, cleanTemplate, cleanDirection);
         LegacyDefTemplate template = loadTemplate(templatePath);
-        Location origin = nextChunkOrigin(player, player.getLocation());
+        Location origin = nextChunkOrigin(player, player.getLocation(), template.sizeX(), template.sizeZ());
+        validateStructureHeight(origin, template.sizeY());
         return startBuild(player, town, cleanType, cleanTemplate, cleanDirection, templatePath, template, null, cleanTemplate, 0.0, 1, 0.0, 0.0, 0.0, 0.0, 0, origin, true);
     }
 
@@ -104,7 +106,8 @@ public final class LegacyStructureService {
         ResolvedBuildTemplate resolved = resolveBuildTemplate(definition, cleanDirection);
         Location requested = player.getLocation().clone();
         requested.setY(y);
-        Location origin = nextChunkOrigin(player, requested);
+        Location origin = nextChunkOrigin(player, requested, resolved.sizeX(), resolved.sizeZ());
+        validateStructureHeight(origin, resolved.sizeY());
 
         cancelPreview(player, true);
 
@@ -133,7 +136,8 @@ public final class LegacyStructureService {
         if (resolved.schematic() == null) {
             throw new IllegalArgumentException("Для основания нужен .schem файл постройки: " + definition.id());
         }
-        Location origin = nextChunkOrigin(player, location);
+        Location origin = nextChunkOrigin(player, location, resolved.sizeX(), resolved.sizeZ());
+        validateStructureHeight(origin, resolved.sizeY());
         cancelPreview(player, true);
         PendingStructurePreview preview = new PendingStructurePreview(
                 player.getUniqueId(),
@@ -163,7 +167,8 @@ public final class LegacyStructureService {
         LegacyDefTemplate template = loadTemplate(templatePath);
         Location requested = player.getLocation().clone();
         requested.setY(y);
-        Location origin = nextChunkOrigin(player, requested);
+        Location origin = nextChunkOrigin(player, requested, template.sizeX(), template.sizeZ());
+        validateStructureHeight(origin, template.sizeY());
         return startBuild(player, null, "legacy-admin", cleanTemplate, cleanDirection, templatePath, template, null, cleanTemplate, 0.0, 1, 0.0, 0.0, 0.0, 0.0, 0, origin, true);
     }
 
@@ -250,7 +255,7 @@ public final class LegacyStructureService {
     private QueuedLegacyBuild buildDefinedStructure(Player player, TownRecord town, StructureDefinition definition, String direction, Location location, double hammerCost, boolean chargeMoney) throws IOException, SQLException {
         String cleanDirection = normalizeRotationDirection(direction);
         ResolvedBuildTemplate resolved = resolveBuildTemplate(definition, cleanDirection);
-        Location origin = nextChunkOrigin(player, location);
+        Location origin = nextChunkOrigin(player, location, resolved.sizeX(), resolved.sizeZ());
         if (resolved.schematic() == null) {
             throw new IllegalArgumentException("Для обычных построек теперь используется только .schem через FAWE. Файл не найден: " + definition.id());
         }
@@ -267,6 +272,7 @@ public final class LegacyStructureService {
     }
 
     private QueuedLegacyBuild startBuild(Player player, TownRecord town, String type, String templateName, String direction, Path templatePath, LegacyDefTemplate template, String structureId, String displayName, double cost, int maxHitpoints, double totalHammers, double productionHammersPerHour, double beakersPerHour, double moneyPerHour, int happinessDelta, Location origin, boolean showPreview) throws SQLException {
+        validateStructureHeight(origin, template.sizeY());
         if (town != null && town.hammersPerHour() <= 0.0) {
             throw new IllegalArgumentException("У города нет производства молотков.");
         }
@@ -319,7 +325,7 @@ public final class LegacyStructureService {
             structureRecorded = true;
             storage.recordStructureChunks(buildId, town == null ? null : town.id(), chunks);
             final long finalBuildId = buildId;
-            int queuedBlocks = buildQueue.pasteChunked(finalBuildId, origin, template, settings.legacyIncludeAir(), durationMillis, showPreview, true, placements -> persistProtectedBlocksAsync(finalBuildId, placements));
+            int queuedBlocks = buildQueue.pasteChunked(finalBuildId, origin, template, settings.legacyIncludeAir(), durationMillis, showPreview, true, (placements, backups) -> persistProtectedBlocksAsync(finalBuildId, placements, backups));
             long townId = town == null ? 0L : town.id();
             return new QueuedLegacyBuild(buildId, templatePath, queuedBlocks, template.sizeX(), template.sizeY(), template.sizeZ(), townId, totalHammers, hammersPerHour, durationMillis);
         } catch (SQLException | RuntimeException exception) {
@@ -342,6 +348,7 @@ public final class LegacyStructureService {
     }
 
     private QueuedLegacyBuild startSchematicBuild(Player player, TownRecord town, String type, String templateName, String direction, Path templatePath, WorldEditSchematicTemplate template, String structureId, String displayName, double cost, int maxHitpoints, double totalHammers, double productionHammersPerHour, double beakersPerHour, double moneyPerHour, int happinessDelta, Location origin, boolean showPreview) throws SQLException {
+        validateStructureHeight(origin, template.sizeY());
         if (town != null && town.hammersPerHour() <= 0.0) {
             throw new IllegalArgumentException("У города нет производства молотков.");
         }
@@ -394,7 +401,7 @@ public final class LegacyStructureService {
             structureRecorded = true;
             storage.recordStructureChunks(buildId, town == null ? null : town.id(), chunks);
             final long finalBuildId = buildId;
-            int queuedBlocks = buildQueue.pasteSchematic(finalBuildId, origin, template, settings.legacyIncludeAir(), durationMillis, showPreview, true, placements -> persistProtectedBlocksAsync(finalBuildId, placements));
+            int queuedBlocks = buildQueue.pasteSchematic(finalBuildId, origin, template, settings.legacyIncludeAir(), durationMillis, showPreview, true, (placements, backups) -> persistProtectedBlocksAsync(finalBuildId, placements, backups));
             long townId = town == null ? 0L : town.id();
             return new QueuedLegacyBuild(buildId, templatePath, queuedBlocks, template.sizeX(), template.sizeY(), template.sizeZ(), townId, totalHammers, hammersPerHour, durationMillis);
         } catch (SQLException | RuntimeException exception) {
@@ -434,11 +441,48 @@ public final class LegacyStructureService {
                 .orElseThrow(() -> new IllegalArgumentException("В городе нет активной стройки."));
         long refund = Math.max(0L, Math.round(Math.floor(build.cost() * 0.90)));
         buildQueue.cancelBuild(build.id());
+        restoreBlockBackups(storage.loadStructureBlockBackups(build.id()));
         storage.cancelStructureBuild(build.id());
         if (refund > 0L) {
             storage.depositTown(town.id(), refund);
         }
         return new CancelBuildResult(build, refund);
+    }
+
+    public DemolishBuildResult demolishStructureAt(Player player) throws SQLException {
+        TownRecord town = requireMayorTown(player);
+        StorageBootstrap.StructureBuildView build = storage.findStructureBuildAtChunk(player.getWorld().getName(), player.getLocation().getChunk().getX(), player.getLocation().getChunk().getZ())
+                .orElseThrow(() -> new IllegalArgumentException("В этом чанке нет постройки."));
+        if (build.townId() == null || build.townId() != town.id()) {
+            throw new IllegalArgumentException("Эта постройка не принадлежит вашему городу.");
+        }
+        if (!build.status().equalsIgnoreCase("COMPLETE")) {
+            throw new IllegalArgumentException("Разрушать можно только полностью построенные здания. Для активной стройки используйте /b cancel.");
+        }
+        if (storage.isFirstCompletedStructureInTown(build.id(), town.id())) {
+            throw new IllegalArgumentException("Первое здание города нельзя разрушить.");
+        }
+        long refund = Math.max(0L, Math.round(Math.floor(build.cost() * 0.50)));
+        restoreBlockBackups(storage.loadStructureBlockBackups(build.id()));
+        storage.demolishStructureBuild(build.id());
+        if (refund > 0L) {
+            storage.depositTown(town.id(), refund);
+        }
+        return new DemolishBuildResult(build, refund);
+    }
+
+    private void restoreBlockBackups(List<BlockBackup> backups) {
+        for (BlockBackup backup : backups) {
+            World world = plugin.getServer().getWorld(backup.world());
+            if (world == null) {
+                continue;
+            }
+            try {
+                world.getBlockAt(backup.x(), backup.y(), backup.z()).setBlockData(Bukkit.createBlockData(backup.blockData()), false);
+            } catch (IllegalArgumentException ignored) {
+                world.getBlockAt(backup.x(), backup.y(), backup.z()).setType(Material.AIR, false);
+            }
+        }
     }
 
     private void sendPhantomPreview(Player player, PendingStructurePreview preview, LegacyDefTemplate template) {
@@ -730,6 +774,13 @@ public final class LegacyStructureService {
         return town;
     }
 
+    private void validateStructureHeight(Location origin, int sizeY) {
+        int baseY = origin.getBlockY();
+        if (baseY < settings.structureMinY() || baseY > settings.structureMaxY()) {
+            throw new IllegalArgumentException("Постройку можно ставить только если нижний блок находится в диапазоне высоты " + settings.structureMinY() + "-" + settings.structureMaxY() + ". Сейчас Y=" + baseY + ".");
+        }
+    }
+
     private long buildDurationMillis(double totalHammers, double hammersPerHour) {
         if (totalHammers <= 0.0) {
             return 0L;
@@ -741,34 +792,54 @@ public final class LegacyStructureService {
         return Math.max(1L, (long) Math.ceil(hours * 60.0 * 60.0 * 1000.0));
     }
 
-    private void persistProtectedBlocksAsync(long buildId, List<BlockPlacement> placements) {
-        List<BlockPlacement> copy = List.copyOf(placements);
+    private void persistProtectedBlocksAsync(long buildId, List<BlockPlacement> placements, List<BlockBackup> backups) {
+        List<BlockPlacement> placementCopy = List.copyOf(placements);
+        List<BlockBackup> backupCopy = List.copyOf(backups);
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
-                storage.recordProtectedBlocksAndCompleteBuild(buildId, copy);
+                storage.recordProtectedBlocksBackupsAndCompleteBuild(buildId, placementCopy, backupCopy);
             } catch (SQLException exception) {
                 plugin.getLogger().warning("Unable to complete structure build " + buildId + ": " + exception.getMessage());
             }
         });
     }
 
-    private Location nextChunkOrigin(Player player, Location location) {
-        int chunkX = location.getBlockX() >> 4;
-        int chunkZ = location.getBlockZ() >> 4;
+    private Location nextChunkOrigin(Player player, Location location, int sizeX, int sizeZ) {
+        int playerChunkX = Math.floorDiv(location.getBlockX(), 16);
+        int playerChunkZ = Math.floorDiv(location.getBlockZ(), 16);
+        int chunksX = Math.max(1, (int) Math.ceil(Math.max(1, sizeX) / 16.0));
+        int chunksZ = Math.max(1, (int) Math.ceil(Math.max(1, sizeZ) / 16.0));
+        int startChunkX;
+        int startChunkZ;
+
         double yaw = player.getLocation().getYaw() % 360.0;
         if (yaw < 0.0) {
             yaw += 360.0;
         }
+
         if (yaw >= 315.0 || yaw < 45.0) {
-            chunkZ += 1;
+            // South: the whole structure starts in chunks in front of the player.
+            startChunkX = centeredStartChunk(playerChunkX, chunksX);
+            startChunkZ = playerChunkZ + 1;
         } else if (yaw < 135.0) {
-            chunkX -= 1;
+            // West.
+            startChunkX = playerChunkX - chunksX;
+            startChunkZ = centeredStartChunk(playerChunkZ, chunksZ);
         } else if (yaw < 225.0) {
-            chunkZ -= 1;
+            // North.
+            startChunkX = centeredStartChunk(playerChunkX, chunksX);
+            startChunkZ = playerChunkZ - chunksZ;
         } else {
-            chunkX += 1;
+            // East.
+            startChunkX = playerChunkX + 1;
+            startChunkZ = centeredStartChunk(playerChunkZ, chunksZ);
         }
-        return new Location(location.getWorld(), chunkX << 4, location.getBlockY(), chunkZ << 4);
+
+        return new Location(location.getWorld(), startChunkX << 4, location.getBlockY(), startChunkZ << 4);
+    }
+
+    private int centeredStartChunk(int playerChunk, int structureChunks) {
+        return playerChunk - (structureChunks / 2);
     }
 
     private Path resolveTemplate(String type, String templateName, String direction) throws IOException {
@@ -877,6 +948,9 @@ public final class LegacyStructureService {
     }
 
     public record CancelBuildResult(StorageBootstrap.StructureBuildView build, long refund) {
+    }
+
+    public record DemolishBuildResult(StorageBootstrap.StructureBuildView build, long refund) {
     }
 
     private record PhantomBlock(Location location, BlockData blockData) {

@@ -3,6 +3,8 @@ package com.avrgaming.civcraft.modern;
 import com.avrgaming.civcraft.modern.build.LegacyStructureService;
 import com.avrgaming.civcraft.modern.build.ProtectedBlockListener;
 import com.avrgaming.civcraft.modern.build.StructurePreviewChatListener;
+import com.avrgaming.civcraft.modern.camp.CampListener;
+import com.avrgaming.civcraft.modern.camp.CampService;
 import com.avrgaming.civcraft.modern.command.CivCraftCommand;
 import com.avrgaming.civcraft.modern.config.ModernCivCraftSettings;
 import com.avrgaming.civcraft.modern.economy.CivCraftEconomyService;
@@ -16,6 +18,9 @@ import com.avrgaming.civcraft.modern.service.TabPrefixService;
 import com.avrgaming.civcraft.modern.service.TownClaimProtectionListener;
 import com.avrgaming.civcraft.modern.service.TownClaimService;
 import com.avrgaming.civcraft.modern.storage.StorageBootstrap;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -32,6 +37,7 @@ public final class CivCraftModernPlugin extends JavaPlugin {
     private CivCraftPlaceholderExpansion placeholderExpansion;
     private FoundationItemListener foundationItems;
     private TabPrefixService tabPrefixes;
+    private CampService campService;
 
     @Override
     public void onEnable() {
@@ -39,6 +45,7 @@ public final class CivCraftModernPlugin extends JavaPlugin {
         saveResourceIfMissing("messages.yml");
 
         reloadModernConfig();
+        ensureBuildingsFolder();
         this.storage = new StorageBootstrap(this, settings);
         storage.initializeLocalStorage();
         storage.warmupAsync();
@@ -46,6 +53,8 @@ public final class CivCraftModernPlugin extends JavaPlugin {
         this.economy = new CivCraftEconomyService(this, storage, settings);
         this.game = new CivCraftGameService(storage, settings, economy);
         this.tabPrefixes = new TabPrefixService(this, game);
+        this.campService = new CampService(this, game, economy, settings);
+        this.campService.startTasks();
         this.legacyStructures = new LegacyStructureService(this, storage, settings, economy, game);
         this.research = new ResearchService(this, storage, game, settings, economy);
         this.townClaims = new TownClaimService(storage, game, settings, economy);
@@ -56,16 +65,17 @@ public final class CivCraftModernPlugin extends JavaPlugin {
         this.foundationItems = new FoundationItemListener(this, game, legacyStructures, tabPrefixes, settings);
         getServer().getPluginManager().registerEvents(foundationItems, this);
         getServer().getPluginManager().registerEvents(new StructurePreviewChatListener(this, legacyStructures), this);
+        getServer().getPluginManager().registerEvents(new CampListener(this, campService), this);
 
         this.integrations = new IntegrationRegistry(this, settings);
         integrations.detect();
 
         if (settings.placeholderApiEnabled() && getServer().getPluginManager().isPluginEnabled("PlaceholderAPI")) {
-            this.placeholderExpansion = new CivCraftPlaceholderExpansion(this, settings, game, research, townClaims, economy);
+            this.placeholderExpansion = new CivCraftPlaceholderExpansion(this, settings, game, research, townClaims, economy, campService);
             placeholderExpansion.register();
         }
 
-        CivCraftCommand executor = new CivCraftCommand(this, game, legacyStructures, research, townClaims, economy);
+        CivCraftCommand executor = new CivCraftCommand(this, game, legacyStructures, research, townClaims, economy, campService);
         for (String commandName : List.of("civcraftmodern", "resident", "camp", "civ", "town", "build", "civadmin", "research")) {
             var command = getCommand(commandName);
             if (command != null) {
@@ -96,6 +106,9 @@ public final class CivCraftModernPlugin extends JavaPlugin {
         if (foundationItems != null) {
             foundationItems.updateSettings(settings);
         }
+        if (campService != null) {
+            campService.updateSettings(settings);
+        }
     }
 
     public void reloadIntegrations() {
@@ -109,6 +122,14 @@ public final class CivCraftModernPlugin extends JavaPlugin {
 
     public IntegrationRegistry integrations() {
         return integrations;
+    }
+
+    private void ensureBuildingsFolder() {
+        try {
+            Files.createDirectories(Path.of(settings.faweSchematicsRoot()).toAbsolutePath().normalize());
+        } catch (IOException exception) {
+            getLogger().warning("Unable to create buildings folder: " + exception.getMessage());
+        }
     }
 
     private void saveResourceIfMissing(String path) {

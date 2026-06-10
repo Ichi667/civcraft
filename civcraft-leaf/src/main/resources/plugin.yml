@@ -16,6 +16,7 @@ softdepend:
   - WorldEdit
   - packetevents
   - Typewriter
+  - DecentHolograms
 commands:
   civcraftmodern:
     aliases: [civcraft]
@@ -28,6 +29,7 @@ commands:
     usage: /<command>
     permission: civcraft.use
   camp:
+    aliases: [c]
     description: Camp mechanics owned by CivCraft.
     usage: /<command> [create <name>]
     permission: civcraft.use

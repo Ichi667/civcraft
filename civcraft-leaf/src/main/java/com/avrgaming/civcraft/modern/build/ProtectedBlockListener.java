@@ -21,14 +21,11 @@ public final class ProtectedBlockListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
-        if (event.getPlayer().hasPermission("civcraft.admin")) {
-            return;
-        }
         Block block = event.getBlock();
         try {
             if (storage.isProtectedBlock(block.getWorld().getName(), block.getX(), block.getY(), block.getZ())) {
                 event.setCancelled(true);
-                event.getPlayer().sendMessage(Component.text("Этот блок защищён CivCraft-постройкой."));
+                event.getPlayer().sendMessage(Component.text("Этот блок является структурным блоком CivCraft-постройки."));
             }
         } catch (SQLException exception) {
             plugin.getLogger().warning("Unable to check protected block: " + exception.getMessage());

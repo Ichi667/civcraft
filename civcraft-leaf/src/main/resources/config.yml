@@ -111,6 +111,8 @@ war:
 structures:
   config: civcraft/data/structures.yml
   min-solid-foundation-ratio: 0.50
+  min-y: 63
+  max-y: 150
   fawe-schematics:
     enabled: true
     root: plugins/civcraft/buildings

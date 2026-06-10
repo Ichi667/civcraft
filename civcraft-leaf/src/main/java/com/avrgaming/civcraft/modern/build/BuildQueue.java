@@ -9,7 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -47,19 +47,19 @@ public final class BuildQueue {
         return true;
     }
 
-    public int paste(Location origin, LegacyDefTemplate template, boolean includeAir, Consumer<List<BlockPlacement>> onComplete) {
-        return pasteChunked(0L, origin, template, includeAir, CHUNKED_INSTANT_BUILD_DURATION, false, true, onComplete);
+    public int paste(Location origin, LegacyDefTemplate template, boolean includeAir, java.util.function.Consumer<List<BlockPlacement>> onComplete) {
+        return pasteChunked(0L, origin, template, includeAir, CHUNKED_INSTANT_BUILD_DURATION, false, true, (placements, backups) -> onComplete.accept(placements));
     }
 
-    public int pasteChunked(Location origin, LegacyDefTemplate template, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, Consumer<List<BlockPlacement>> onComplete) {
-        return pasteChunked(0L, origin, template, includeAir, buildDurationMillis, showBedrockPreview, true, onComplete);
+    public int pasteChunked(Location origin, LegacyDefTemplate template, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, java.util.function.Consumer<List<BlockPlacement>> onComplete) {
+        return pasteChunked(0L, origin, template, includeAir, buildDurationMillis, showBedrockPreview, true, (placements, backups) -> onComplete.accept(placements));
     }
 
-    public int pasteChunked(Location origin, LegacyDefTemplate template, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, boolean clearChunks, Consumer<List<BlockPlacement>> onComplete) {
-        return pasteChunked(0L, origin, template, includeAir, buildDurationMillis, showBedrockPreview, clearChunks, onComplete);
+    public int pasteChunked(Location origin, LegacyDefTemplate template, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, boolean clearChunks, java.util.function.Consumer<List<BlockPlacement>> onComplete) {
+        return pasteChunked(0L, origin, template, includeAir, buildDurationMillis, showBedrockPreview, clearChunks, (placements, backups) -> onComplete.accept(placements));
     }
 
-    public int pasteChunked(long buildId, Location origin, LegacyDefTemplate template, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, boolean clearChunks, Consumer<List<BlockPlacement>> onComplete) {
+    public int pasteChunked(long buildId, Location origin, LegacyDefTemplate template, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, boolean clearChunks, BuildCompleteHandler onComplete) {
         int queuedBlocks = includeAir ? template.blocks().size() : template.nonAirBlocks();
         int originX = origin.getBlockX();
         int originY = origin.getBlockY();
@@ -74,11 +74,11 @@ public final class BuildQueue {
         return queuedBlocks;
     }
 
-    public int pasteSchematic(Location origin, WorldEditSchematicTemplate template, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, boolean clearChunks, Consumer<List<BlockPlacement>> onComplete) {
-        return pasteSchematic(0L, origin, template, includeAir, buildDurationMillis, showBedrockPreview, clearChunks, onComplete);
+    public int pasteSchematic(Location origin, WorldEditSchematicTemplate template, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, boolean clearChunks, java.util.function.Consumer<List<BlockPlacement>> onComplete) {
+        return pasteSchematic(0L, origin, template, includeAir, buildDurationMillis, showBedrockPreview, clearChunks, (placements, backups) -> onComplete.accept(placements));
     }
 
-    public int pasteSchematic(long buildId, Location origin, WorldEditSchematicTemplate template, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, boolean clearChunks, Consumer<List<BlockPlacement>> onComplete) {
+    public int pasteSchematic(long buildId, Location origin, WorldEditSchematicTemplate template, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, boolean clearChunks, BuildCompleteHandler onComplete) {
         int queuedBlocks = includeAir ? template.blocks().size() : template.nonAirBlocks();
         int originX = origin.getBlockX();
         int originY = origin.getBlockY();
@@ -93,6 +93,11 @@ public final class BuildQueue {
         return queuedBlocks;
     }
 
+    @FunctionalInterface
+    public interface BuildCompleteHandler {
+        void accept(List<BlockPlacement> placements, List<BlockBackup> backups);
+    }
+
     private interface CancellableBuild {
         void requestCancel();
     }
@@ -103,8 +108,9 @@ public final class BuildQueue {
         private final PreparedBuild prepared;
         private final long buildDurationMillis;
         private final boolean showBedrockPreview;
-        private final Consumer<List<BlockPlacement>> onComplete;
+        private final BuildCompleteHandler onComplete;
         private final List<BlockPlacement> placements;
+        private final Map<String, BlockBackup> backupsByKey = new LinkedHashMap<>();
         private final List<ClearBlock> placedStructureBlocks = new ArrayList<>();
         private final Map<String, PreviewBlock> activePreviewByKey = new LinkedHashMap<>();
         private final Set<String> placedKeys = new HashSet<>();
@@ -117,7 +123,7 @@ public final class BuildQueue {
         private boolean startedBuilding;
         private volatile boolean cancelRequested;
 
-        private BuildSession(long buildId, Location origin, PreparedBuild prepared, long buildDurationMillis, boolean showBedrockPreview, Consumer<List<BlockPlacement>> onComplete) {
+        private BuildSession(long buildId, Location origin, PreparedBuild prepared, long buildDurationMillis, boolean showBedrockPreview, BuildCompleteHandler onComplete) {
             this.buildId = buildId;
             this.origin = origin;
             this.prepared = prepared;
@@ -166,7 +172,7 @@ public final class BuildQueue {
                             activeBuilds.remove(buildId);
                         }
                         cancel();
-                        onComplete.accept(List.copyOf(placements));
+                        onComplete.accept(List.copyOf(placements), List.copyOf(backupsByKey.values()));
                     }
                 }
             }.runTaskTimer(plugin, 1L, 1L);
@@ -194,6 +200,7 @@ public final class BuildQueue {
             while (used < clearBudget && clearCursor < prepared.clearBlocks.size()) {
                 ClearBlock clear = prepared.clearBlocks.get(clearCursor++);
                 Block block = world.getBlockAt(clear.x, clear.y, clear.z);
+                rememberBackup(world.getName(), clear.x, clear.y, clear.z, block);
                 if (!block.getType().isAir()) {
                     block.setType(Material.AIR, false);
                 }
@@ -233,9 +240,13 @@ public final class BuildQueue {
                 LegacyBlock legacyBlock = prepared.orderedBlocks.get(placedBlockCursor++);
                 String key = blockKey(prepared.world, prepared.originX + legacyBlock.x(), prepared.originY + legacyBlock.y(), prepared.originZ + legacyBlock.z());
                 PreviewBlock preview = activePreviewByKey.remove(key);
-                if (preview != null) {
+                Block existingBlock = origin.getWorld().getBlockAt(prepared.originX + legacyBlock.x(), prepared.originY + legacyBlock.y(), prepared.originZ + legacyBlock.z());
+                if (preview != null && preview.originalData != null) {
+                    rememberBackupData(prepared.world, prepared.originX + legacyBlock.x(), prepared.originY + legacyBlock.y(), prepared.originZ + legacyBlock.z(), preview.originalData);
                     preview.active = false;
                     preview.removed = true;
+                } else {
+                    rememberBackup(prepared.world, prepared.originX + legacyBlock.x(), prepared.originY + legacyBlock.y(), prepared.originZ + legacyBlock.z(), existingBlock);
                 }
                 BlockPlacement placement = placeStructureBlock(origin, legacyBlock);
                 placedKeys.add(key);
@@ -265,13 +276,33 @@ public final class BuildQueue {
 
         private void cleanupCanceledBuild() {
             restoreAllBedrockPreview();
-            World world = origin.getWorld();
-            for (ClearBlock placed : placedStructureBlocks) {
-                Block block = world.getBlockAt(placed.x, placed.y, placed.z);
-                block.setType(Material.AIR, false);
-            }
+            restoreBackups();
             placedStructureBlocks.clear();
             placements.clear();
+        }
+
+        private void rememberBackup(String worldName, int x, int y, int z, Block block) {
+            rememberBackupData(worldName, x, y, z, block.getBlockData());
+        }
+
+        private void rememberBackupData(String worldName, int x, int y, int z, BlockData blockData) {
+            String key = blockKey(worldName, x, y, z);
+            backupsByKey.computeIfAbsent(key, ignored -> new BlockBackup(worldName, x, y, z, blockData.getAsString()));
+        }
+
+        private void restoreBackups() {
+            for (BlockBackup backup : backupsByKey.values()) {
+                World backupWorld = plugin.getServer().getWorld(backup.world());
+                if (backupWorld == null) {
+                    continue;
+                }
+                try {
+                    backupWorld.getBlockAt(backup.x(), backup.y(), backup.z()).setBlockData(Bukkit.createBlockData(backup.blockData()), false);
+                } catch (IllegalArgumentException ignored) {
+                    backupWorld.getBlockAt(backup.x(), backup.y(), backup.z()).setType(Material.AIR, false);
+                }
+            }
+            backupsByKey.clear();
         }
 
         @Override
@@ -338,9 +369,10 @@ public final class BuildQueue {
         private final Location origin;
         private final PreparedBuild prepared;
         private final boolean showBedrockPreview;
-        private final Consumer<List<BlockPlacement>> onComplete;
+        private final BuildCompleteHandler onComplete;
         private final List<WorldEditSchematicTemplate.SchematicBlock> orderedBlocks;
         private final List<BlockPlacement> placements;
+        private final Map<String, BlockBackup> backupsByKey = new LinkedHashMap<>();
         private final List<ClearBlock> placedStructureBlocks = new ArrayList<>();
         private final Map<String, PreviewBlock> activePreviewByKey = new LinkedHashMap<>();
         private int chunkLoadCursor;
@@ -352,7 +384,7 @@ public final class BuildQueue {
         private boolean startedBuilding;
         private volatile boolean cancelRequested;
 
-        private SchematicBuildSession(long buildId, Location origin, PreparedBuild prepared, WorldEditSchematicTemplate schematic, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, Consumer<List<BlockPlacement>> onComplete) {
+        private SchematicBuildSession(long buildId, Location origin, PreparedBuild prepared, WorldEditSchematicTemplate schematic, boolean includeAir, long buildDurationMillis, boolean showBedrockPreview, BuildCompleteHandler onComplete) {
             this.buildId = buildId;
             this.origin = origin;
             this.prepared = prepared;
@@ -411,7 +443,7 @@ public final class BuildQueue {
                             activeBuilds.remove(buildId);
                         }
                         cancel();
-                        onComplete.accept(List.copyOf(placements));
+                        onComplete.accept(List.copyOf(placements), List.copyOf(backupsByKey.values()));
                     }
                 }
             }.runTaskTimer(plugin, 1L, 1L);
@@ -439,6 +471,7 @@ public final class BuildQueue {
             while (used < clearBudget && clearCursor < prepared.clearBlocks.size()) {
                 ClearBlock clear = prepared.clearBlocks.get(clearCursor++);
                 Block block = world.getBlockAt(clear.x, clear.y, clear.z);
+                rememberBackup(world.getName(), clear.x, clear.y, clear.z, block);
                 if (!block.getType().isAir()) {
                     block.setType(Material.AIR, false);
                 }
@@ -482,12 +515,14 @@ public final class BuildQueue {
                 int z = origin.getBlockZ() + schematicBlock.z();
                 String key = blockKey(world.getName(), x, y, z);
                 PreviewBlock preview = activePreviewByKey.remove(key);
-                if (preview != null) {
+                Block block = world.getBlockAt(x, y, z);
+                if (preview != null && preview.originalData != null) {
+                    rememberBackupData(world.getName(), x, y, z, preview.originalData);
                     preview.active = false;
                     preview.removed = true;
+                } else {
+                    rememberBackup(world.getName(), x, y, z, block);
                 }
-
-                Block block = world.getBlockAt(x, y, z);
                 block.setBlockData(schematicBlock.blockData(), false);
                 if (!schematicBlock.air()) {
                     placements.add(new BlockPlacement(world.getName(), x, y, z, schematicBlock.materialId()));
@@ -500,13 +535,33 @@ public final class BuildQueue {
 
         private void cleanupCanceledBuild() {
             restoreAllBedrockPreview();
-            World world = origin.getWorld();
-            for (ClearBlock placed : placedStructureBlocks) {
-                Block block = world.getBlockAt(placed.x, placed.y, placed.z);
-                block.setType(Material.AIR, false);
-            }
+            restoreBackups();
             placedStructureBlocks.clear();
             placements.clear();
+        }
+
+        private void rememberBackup(String worldName, int x, int y, int z, Block block) {
+            rememberBackupData(worldName, x, y, z, block.getBlockData());
+        }
+
+        private void rememberBackupData(String worldName, int x, int y, int z, BlockData blockData) {
+            String key = blockKey(worldName, x, y, z);
+            backupsByKey.computeIfAbsent(key, ignored -> new BlockBackup(worldName, x, y, z, blockData.getAsString()));
+        }
+
+        private void restoreBackups() {
+            for (BlockBackup backup : backupsByKey.values()) {
+                World backupWorld = plugin.getServer().getWorld(backup.world());
+                if (backupWorld == null) {
+                    continue;
+                }
+                try {
+                    backupWorld.getBlockAt(backup.x(), backup.y(), backup.z()).setBlockData(Bukkit.createBlockData(backup.blockData()), false);
+                } catch (IllegalArgumentException ignored) {
+                    backupWorld.getBlockAt(backup.x(), backup.y(), backup.z()).setType(Material.AIR, false);
+                }
+            }
+            backupsByKey.clear();
         }
 
         @Override

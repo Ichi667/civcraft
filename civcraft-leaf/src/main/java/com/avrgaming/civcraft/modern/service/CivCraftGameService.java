@@ -124,6 +124,9 @@ public final class CivCraftGameService {
             throw new IllegalArgumentException("Название лагеря должно быть от 5 до 16 символов и без спецсимволов.");
         }
         ResidentProfile resident = resident(player);
+        if (resident.civId() != null) {
+            throw new IllegalArgumentException("Игрок в цивилизации не может основать лагерь.");
+        }
         if (resident.campId() != null || storage.findCampByOwner(player.getUniqueId()).isPresent()) {
             throw new IllegalArgumentException("У вас уже есть лагерь.");
         }
@@ -148,6 +151,9 @@ public final class CivCraftGameService {
             throw new IllegalArgumentException("Тег цивилизации должен быть от 3 до 5 символов и без спецсимволов.");
         }
         ResidentProfile resident = resident(player);
+        if (resident.campId() != null) {
+            throw new IllegalArgumentException("Игрок в лагере не может основать цивилизацию.");
+        }
         if (resident.civId() != null) {
             throw new IllegalArgumentException("Вы уже состоите в цивилизации.");
         }

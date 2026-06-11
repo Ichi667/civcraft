@@ -1,5 +1,6 @@
 package com.avrgaming.civcraft.modern;
 
+import com.avrgaming.civcraft.modern.api.CivCraftCampApi;
 import com.avrgaming.civcraft.modern.build.LegacyStructureService;
 import com.avrgaming.civcraft.modern.build.ProtectedBlockListener;
 import com.avrgaming.civcraft.modern.build.StructurePreviewChatListener;
@@ -38,6 +39,7 @@ public final class CivCraftModernPlugin extends JavaPlugin {
     private FoundationItemListener foundationItems;
     private TabPrefixService tabPrefixes;
     private CampService campService;
+    private CivCraftCampApi campApi;
 
     @Override
     public void onEnable() {
@@ -55,6 +57,9 @@ public final class CivCraftModernPlugin extends JavaPlugin {
         this.tabPrefixes = new TabPrefixService(this, game);
         this.campService = new CampService(this, game, economy, settings);
         this.campService.startTasks();
+        this.campApi = new CivCraftCampApi(this, settings);
+        this.campApi.initializeStorage();
+        this.campApi.startNpcMarkerScanner();
         this.legacyStructures = new LegacyStructureService(this, storage, settings, economy, game);
         this.research = new ResearchService(this, storage, game, settings, economy);
         this.townClaims = new TownClaimService(storage, game, settings, economy);
@@ -109,6 +114,9 @@ public final class CivCraftModernPlugin extends JavaPlugin {
         if (campService != null) {
             campService.updateSettings(settings);
         }
+        if (campApi != null) {
+            campApi.updateSettings(settings);
+        }
     }
 
     public void reloadIntegrations() {
@@ -122,6 +130,10 @@ public final class CivCraftModernPlugin extends JavaPlugin {
 
     public IntegrationRegistry integrations() {
         return integrations;
+    }
+
+    public CivCraftCampApi getCampApi() {
+        return campApi;
     }
 
     private void ensureBuildingsFolder() {

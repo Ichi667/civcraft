@@ -442,10 +442,14 @@ public final class CampService {
     private void setupMissingWorkstations() {
         try {
             for (CampInfo camp : camps()) {
-                if (!camp.hasAllWorkstations()) {
+                boolean needsWorkstations = !camp.hasAllWorkstations();
+                boolean needsNpcMarker = !hasCampNpcMarker(camp.id());
+                if (needsWorkstations || needsNpcMarker) {
                     Workstations found = scanAndReplaceWorkstations(camp);
-                    updateWorkstations(camp.id(), found.food(), found.breakerInput(), found.breakerOutput(), found.controlBlock());
-                    camp = campInfo(camp.id()).orElse(camp);
+                    if (needsWorkstations) {
+                        updateWorkstations(camp.id(), found.food(), found.breakerInput(), found.breakerOutput(), found.controlBlock());
+                        camp = campInfo(camp.id()).orElse(camp);
+                    }
                 }
                 updateControlHologram(camp);
             }
@@ -489,7 +493,7 @@ public final class CampService {
                         continue;
                     }
                     Block block = world.getBlockAt(rs.getInt("x"), rs.getInt("y"), rs.getInt("z"));
-                    replaceCampMarkerBlock(block, found);
+                    replaceCampMarkerBlock(camp.id(), block, found);
                     fixCampSign(block);
                 }
             }
@@ -521,7 +525,7 @@ public final class CampService {
                                 || type == Material.OBSIDIAN
                                 || type == Material.PINK_CONCRETE
                                 || block.getState() instanceof Sign) {
-                            replaceCampMarkerBlock(block, found);
+                            replaceCampMarkerBlock(camp.id(), block, found);
                             fixCampSign(block);
                         }
                     }
@@ -530,7 +534,7 @@ public final class CampService {
         }
     }
 
-    private void replaceCampMarkerBlock(Block block, Location[] found) {
+    private void replaceCampMarkerBlock(long campId, Block block, Location[] found) {
         Material type = block.getType();
         if (type == Material.BLACK_CONCRETE) {
             block.setType(Material.CHEST, false);
@@ -558,7 +562,52 @@ public final class CampService {
             return;
         }
         if (type == Material.PINK_CONCRETE) {
+            saveCampNpcMarker(campId, block);
             block.setType(Material.AIR, false);
+        }
+    }
+
+    private boolean hasCampNpcMarker(long campId) {
+        Object api = campApi();
+        if (api == null) {
+            return true;
+        }
+        try {
+            Method method = api.getClass().getMethod("hasCampNpcMarker", long.class);
+            Object result = method.invoke(api, campId);
+            return result instanceof Boolean value && value;
+        } catch (NoSuchMethodException ignored) {
+            return false;
+        } catch (ReflectiveOperationException | RuntimeException exception) {
+            plugin.getLogger().warning("Unable to check camp NPC marker through CivCraftCampApi: " + exception.getMessage());
+            return true;
+        }
+    }
+
+    private void saveCampNpcMarker(long campId, Block block) {
+        Object api = campApi();
+        if (api == null) {
+            return;
+        }
+        try {
+            Method method = api.getClass().getMethod("saveCampNpcMarker", long.class, String.class, int.class, int.class, int.class);
+            method.invoke(api, campId, block.getWorld().getName(), block.getX(), block.getY(), block.getZ());
+        } catch (NoSuchMethodException exception) {
+            plugin.getLogger().warning("CivCraftCampApi found, but saveCampNpcMarker(long, String, int, int, int) is missing.");
+        } catch (ReflectiveOperationException | RuntimeException exception) {
+            plugin.getLogger().warning("Unable to save camp NPC marker through CivCraftCampApi: " + exception.getMessage());
+        }
+    }
+
+    private Object campApi() {
+        try {
+            Method method = plugin.getClass().getMethod("getCampApi");
+            return method.invoke(plugin);
+        } catch (NoSuchMethodException ignored) {
+            return null;
+        } catch (ReflectiveOperationException | RuntimeException exception) {
+            plugin.getLogger().warning("Unable to access CivCraftCampApi: " + exception.getMessage());
+            return null;
         }
     }
 

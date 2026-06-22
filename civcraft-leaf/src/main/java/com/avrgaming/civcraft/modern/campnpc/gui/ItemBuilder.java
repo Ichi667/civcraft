@@ -41,9 +41,19 @@ public final class ItemBuilder {
             if (section.contains("custom-model-data")) {
                 meta.setCustomModelData(section.getInt("custom-model-data"));
             }
+            if (section.getBoolean("unbreakable", false)) {
+                meta.setUnbreakable(true);
+                meta.addItemFlags(ItemFlag.HIDE_UNBREAKABLE);
+            }
             if (section.getBoolean("glow", false)) {
                 meta.addEnchant(Enchantment.UNBREAKING, 1, true);
                 meta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+            }
+            for (String flag : section.getStringList("flags")) {
+                try {
+                    meta.addItemFlags(ItemFlag.valueOf(flag.trim().toUpperCase()));
+                } catch (IllegalArgumentException ignored) {
+                }
             }
             item.setItemMeta(meta);
         }

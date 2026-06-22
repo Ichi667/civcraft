@@ -35,7 +35,8 @@ public final class IntegrationRegistry {
         statuses.add(new IntegrationStatus("PlaceholderAPI", settings.placeholderApiEnabled(), plugins.isPluginEnabled("PlaceholderAPI"), "direct-expansion", "плейсхолдеры регистрируются отдельной expansion"));
         statuses.add(new WorldEditIntegration(plugins.isPluginEnabled("FastAsyncWorldEdit"), plugins.isPluginEnabled("WorldEdit")).status());
         statuses.add(new IntegrationStatus("PacketEvents", settings.packetEventsEnabled(), plugins.isPluginEnabled("packetevents") || plugins.isPluginEnabled("PacketEvents"), "reserved", "включать только для packet-only функций"));
-        statuses.add(new TypewriterIntegration(settings.typewriterEnabled(), plugins.isPluginEnabled("Typewriter")).status());
+        statuses.add(new IntegrationStatus("FancyNpcs", true, plugins.isPluginEnabled("FancyNpcs"), "camp-npc-menus", "NPC лагерей создаются через FancyNpcs"));
+        statuses.add(new IntegrationStatus("ItemsAdder", false, plugins.isPluginEnabled("ItemsAdder"), "optional-gui-items", "опционально для предметов GUI через namespaced id"));
     }
 
     public List<IntegrationStatus> statuses() {

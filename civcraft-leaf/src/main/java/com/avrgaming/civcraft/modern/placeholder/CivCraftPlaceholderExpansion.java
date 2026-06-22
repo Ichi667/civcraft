@@ -11,6 +11,10 @@ import com.avrgaming.civcraft.modern.research.ResearchProgress;
 import com.avrgaming.civcraft.modern.research.ResearchService;
 import com.avrgaming.civcraft.modern.service.CivCraftGameService;
 import com.avrgaming.civcraft.modern.service.TownClaimService;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import org.bukkit.OfflinePlayer;
@@ -65,6 +69,9 @@ public final class CivCraftPlaceholderExpansion extends PlaceholderExpansion {
         try {
             ResidentProfile resident = game.resident(player);
             String key = params.toLowerCase();
+            if (key.equals("camp_in_camp") || key.equals("camp_is_member") || key.equals("camp_has_camp")) {
+                return camps.placeholderInfo(player.getUniqueId()).isPresent() ? "yes" : "no";
+            }
             if (key.startsWith("camp_")) {
                 return camps.placeholderInfo(player.getUniqueId()).map(info -> switch (key) {
                     case "camp_name" -> info.name();
@@ -72,6 +79,7 @@ public final class CivCraftPlaceholderExpansion extends PlaceholderExpansion {
                     case "camp_level" -> String.valueOf(info.level());
                     case "camp_experience", "camp_xp" -> String.valueOf(info.experience());
                     case "camp_next_experience", "camp_next_xp" -> String.valueOf(info.nextLevelExperience());
+                    case "camp_leadership_tokens", "camp_leadership_points", "camp_leader_tokens" -> String.valueOf(campLeadershipTokens(player.getUniqueId()));
                     default -> settings.placeholderEmptyValue();
                 }).orElse(settings.placeholderEmptyValue());
             }
@@ -93,4 +101,29 @@ public final class CivCraftPlaceholderExpansion extends PlaceholderExpansion {
             return settings.placeholderEmptyValue();
         }
     }
+
+    private int campLeadershipTokens(java.util.UUID playerUuid) {
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + settings.sqlitePath(plugin.getDataFolder().toPath()))) {
+            try (PreparedStatement pragma = connection.prepareStatement("PRAGMA busy_timeout = 5000")) {
+                pragma.execute();
+            }
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT COALESCE(clp.points, 0) AS points
+                    FROM camp_members cm
+                    JOIN camps c ON c.id = cm.camp_id
+                    LEFT JOIN camp_leadership_points clp ON clp.uuid = c.owner_uuid
+                    WHERE cm.uuid = ?
+                    LIMIT 1
+                    """)) {
+                statement.setString(1, playerUuid.toString());
+                try (ResultSet rs = statement.executeQuery()) {
+                    return rs.next() ? rs.getInt("points") : 0;
+                }
+            }
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Unable to load camp leadership tokens placeholder: " + exception.getMessage());
+            return 0;
+        }
+    }
+
 }

@@ -27,8 +27,12 @@ public final class FancyNpcService {
     private final MenuManager menus;
     private final Map<String, Long> npcNameToCamp = new HashMap<>();
     private final Listener dynamicListener = new Listener() {};
+    private boolean npcEnabled;
+    private boolean lookAtNearestPlayer;
     private String npcDisplayName;
     private String npcSkin;
+    private String npcSkinTexture;
+    private String npcSkinSignature;
     private long syncIntervalTicks;
     private int syncTaskId = -1;
 
@@ -57,9 +61,13 @@ public final class FancyNpcService {
     }
 
     private void reloadConfigValues() {
-        this.npcDisplayName = plugin.getConfig().getString("npc.display-name", "<gold>{camp_name}</gold>");
-        this.npcSkin = plugin.getConfig().getString("npc.skin", "");
-        long seconds = Math.max(1L, plugin.getConfig().getLong("sync-interval-seconds", 1L));
+        this.npcEnabled = plugin.getConfig().getBoolean("camp-npc.npc.enabled", plugin.getConfig().getBoolean("npc.enabled", true));
+        this.lookAtNearestPlayer = plugin.getConfig().getBoolean("camp-npc.npc.look-at-nearest-player", plugin.getConfig().getBoolean("npc.look-at-nearest-player", false));
+        this.npcDisplayName = firstConfigString("camp-npc.npc.display-name", "npc.display-name", "<gold>{camp_name}</gold>");
+        this.npcSkin = firstConfigString("camp-npc.npc.skin", "npc.skin", "");
+        this.npcSkinTexture = firstConfigString("camp-npc.npc.skin-texture", "npc.skin-texture", "");
+        this.npcSkinSignature = firstConfigString("camp-npc.npc.skin-signature", "npc.skin-signature", "");
+        long seconds = Math.max(1L, plugin.getConfig().getLong("camp-npc.sync-interval-seconds", plugin.getConfig().getLong("sync-interval-seconds", 1L)));
         this.syncIntervalTicks = seconds * 20L;
     }
 
@@ -154,6 +162,13 @@ public final class FancyNpcService {
                 return;
             }
         }
+        if (!npcEnabled) {
+            for (String existing : new HashSet<>(npcNameToCamp.keySet())) {
+                removeNpc(existing);
+                npcNameToCamp.remove(existing);
+            }
+            return;
+        }
         List<CampMarker> markers = civCraft.getMarkers();
         Set<String> expectedNames = new HashSet<>();
         for (CampMarker marker : markers) {
@@ -167,8 +182,11 @@ public final class FancyNpcService {
             String npcName = npcName(marker.campId());
             expectedNames.add(npcName);
             npcNameToCamp.put(npcName, marker.campId());
-            if (getNpc(npcName) == null) {
+            Object existingNpc = getNpc(npcName);
+            if (existingNpc == null) {
                 createNpc(marker, world, npcName);
+            } else {
+                applyNpcOptions(existingNpc, marker);
             }
         }
         for (String existing : new HashSet<>(npcNameToCamp.keySet())) {
@@ -192,16 +210,53 @@ public final class FancyNpcService {
         Location location = new Location(world, marker.x() + 0.5, marker.y(), marker.z() + 0.5);
         Constructor<?> constructor = dataClass.getConstructor(String.class, UUID.class, Location.class);
         Object data = constructor.newInstance(npcName, plugin.getServer().getConsoleSender().getName().isEmpty() ? UUID.randomUUID() : UUID.nameUUIDFromBytes(npcName.getBytes()), location);
-        callIfExists(data, "setDisplayName", new Class<?>[]{String.class}, npcDisplayName.replace("{camp_name}", marker.campName()).replace("{camp_id}", String.valueOf(marker.campId())));
-        if (npcSkin != null && !npcSkin.isBlank()) {
-            callIfExists(data, "setSkin", new Class<?>[]{String.class}, npcSkin);
-        }
+        applyDataOptions(data, marker);
         Object npc = invokeOneArg(adapter, "apply", data);
         callIfExists(npc, "setSaveToFile", new Class<?>[]{boolean.class}, false);
         invokeOneArg(manager, "registerNpc", npc);
         invokeNoArgs(npc, "create");
         invokeNoArgs(npc, "spawnForAll");
         plugin.getLogger().info("Spawned camp menu NPC for camp " + marker.campId());
+    }
+
+    private void applyNpcOptions(Object npc, CampMarker marker) {
+        Object data = callOptional(npc, "getData");
+        if (data == null) {
+            return;
+        }
+        applyDataOptions(data, marker);
+        callIfExists(npc, "updateForAll", new Class<?>[]{});
+        callIfExists(npc, "update", new Class<?>[]{});
+    }
+
+    private void applyDataOptions(Object data, CampMarker marker) {
+        String displayName = npcDisplayName == null ? "" : npcDisplayName
+                .replace("{camp_name}", marker.campName())
+                .replace("{camp_id}", String.valueOf(marker.campId()));
+        callIfExists(data, "setDisplayName", new Class<?>[]{String.class}, displayName);
+        if (npcSkin != null && !npcSkin.isBlank()) {
+            callIfExists(data, "setSkin", new Class<?>[]{String.class}, npcSkin);
+        }
+        if (npcSkinTexture != null && !npcSkinTexture.isBlank()) {
+            callIfExists(data, "setSkinTexture", new Class<?>[]{String.class}, npcSkinTexture);
+            callIfExists(data, "setTexture", new Class<?>[]{String.class}, npcSkinTexture);
+        }
+        if (npcSkinSignature != null && !npcSkinSignature.isBlank()) {
+            callIfExists(data, "setSkinSignature", new Class<?>[]{String.class}, npcSkinSignature);
+            callIfExists(data, "setSignature", new Class<?>[]{String.class}, npcSkinSignature);
+        }
+        callIfExists(data, "setTurnToPlayer", new Class<?>[]{boolean.class}, lookAtNearestPlayer);
+        callIfExists(data, "setLookAtPlayer", new Class<?>[]{boolean.class}, lookAtNearestPlayer);
+        callIfExists(data, "setLookAtNearestPlayer", new Class<?>[]{boolean.class}, lookAtNearestPlayer);
+        callIfExists(data, "setTrackNearestPlayer", new Class<?>[]{boolean.class}, lookAtNearestPlayer);
+    }
+
+    private String firstConfigString(String primary, String legacyPath, String fallback) {
+        String value = plugin.getConfig().getString(primary);
+        if (value != null) {
+            return value;
+        }
+        return plugin.getConfig().getString(legacyPath, fallback);
     }
 
     private Object getNpc(String name) throws ReflectiveOperationException {

@@ -2,9 +2,10 @@ package com.avrgaming.civcraft.modern.command;
 
 import com.avrgaming.civcraft.modern.CivCraftModernPlugin;
 import com.avrgaming.civcraft.modern.build.LegacyStructureService;
-import com.avrgaming.civcraft.modern.camp.CampService;
 import com.avrgaming.civcraft.modern.build.QueuedLegacyBuild;
-import com.avrgaming.civcraft.modern.domain.CampRecord;
+import com.avrgaming.civcraft.modern.camp.CampService;
+import com.avrgaming.civcraft.modern.campnpc.CampNpcMenusService;
+import com.avrgaming.civcraft.modern.campnpc.lang.Lang;
 import com.avrgaming.civcraft.modern.domain.CivRecord;
 import com.avrgaming.civcraft.modern.domain.ResidentProfile;
 import com.avrgaming.civcraft.modern.domain.TownClaimRecord;
@@ -19,7 +20,7 @@ import java.io.IOException;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Locale;
-import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -37,9 +38,11 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
     private final TownClaimService townClaims;
     private final CivCraftEconomyService economy;
     private final CampService campService;
-    private final MiniMessage miniMessage = MiniMessage.miniMessage();
+    private final CampNpcMenusService campNpcMenus;
+    private final Lang lang;
+    private final LegacyComponentSerializer legacy = LegacyComponentSerializer.legacySection();
 
-    public CivCraftCommand(CivCraftModernPlugin plugin, CivCraftGameService game, LegacyStructureService legacyStructures, ResearchService research, TownClaimService townClaims, CivCraftEconomyService economy, CampService campService) {
+    public CivCraftCommand(CivCraftModernPlugin plugin, CivCraftGameService game, LegacyStructureService legacyStructures, ResearchService research, TownClaimService townClaims, CivCraftEconomyService economy, CampService campService, CampNpcMenusService campNpcMenus, Lang lang) {
         this.plugin = plugin;
         this.game = game;
         this.legacyStructures = legacyStructures;
@@ -47,19 +50,22 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
         this.townClaims = townClaims;
         this.economy = economy;
         this.campService = campService;
+        this.campNpcMenus = campNpcMenus;
+        this.lang = lang;
     }
 
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, String @NotNull [] args) {
-        String primary = label.toLowerCase(Locale.ROOT);
+        String primary = command.getName().toLowerCase(Locale.ROOT);
+        String alias = label.toLowerCase(Locale.ROOT);
         String[] effectiveArgs = args;
-        if (List.of("resident", "res", "camp", "c", "civ", "town", "t", "build", "b", "civadmin", "research", "tech").contains(primary)) {
-            String category = switch (primary) {
-                case "res" -> "resident";
+
+        if (List.of("camp", "c", "civ", "town", "t", "build", "b", "research", "tech", "civadmin").contains(alias)) {
+            String category = switch (alias) {
                 case "c" -> "camp";
                 case "t" -> "town";
-                case "tech" -> "research";
                 case "b" -> "build";
+                case "tech" -> "research";
                 default -> primary;
             };
             effectiveArgs = new String[args.length + 1];
@@ -68,36 +74,12 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
         }
 
         if (effectiveArgs.length == 0) {
-            help(sender, label);
+            help(sender, primary);
             return true;
         }
+
         try {
             switch (effectiveArgs[0].toLowerCase(Locale.ROOT)) {
-                case "reload" -> {
-                    if (!sender.hasPermission("civcraft.admin")) {
-                        error(sender, "Нет прав.");
-                        return true;
-                    }
-                    plugin.reloadModernConfig();
-                    economy.reload(plugin.settings());
-                    game.updateSettings(plugin.settings());
-                    legacyStructures.updateSettings(plugin.settings());
-                    research.updateSettings(plugin.settings());
-                    townClaims.updateSettings(plugin.settings());
-                    plugin.reloadIntegrations();
-                    success(sender, "Конфигурация перезагружена.");
-                    return true;
-                }
-                case "integrations" -> {
-                    sender.sendMessage(miniMessage.deserialize("<yellow>Интеграции CivCraft:</yellow>"));
-                    plugin.integrations().statusLines().forEach(line -> sender.sendMessage(miniMessage.deserialize(line)));
-                    return true;
-                }
-                case "resident" -> {
-                    Player player = requirePlayer(sender);
-                    showResident(player);
-                    return true;
-                }
                 case "camp" -> {
                     Player player = requirePlayer(sender);
                     handleCamp(player, effectiveArgs);
@@ -118,18 +100,18 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
                     handleBuild(player, effectiveArgs);
                     return true;
                 }
-                case "civadmin" -> {
-                    Player player = requirePlayer(sender);
-                    handleCivAdmin(player, effectiveArgs);
-                    return true;
-                }
                 case "research" -> {
                     Player player = requirePlayer(sender);
                     handleResearch(player, effectiveArgs);
                     return true;
                 }
+                case "civadmin" -> {
+                    Player player = requirePlayer(sender);
+                    handleCivAdmin(player, effectiveArgs);
+                    return true;
+                }
                 default -> {
-                    help(sender, label);
+                    help(sender, primary);
                     return true;
                 }
             }
@@ -137,10 +119,10 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
             error(sender, exception.getMessage());
         } catch (SQLException exception) {
             plugin.getLogger().warning("CivCraft command failed: " + exception.getMessage());
-            error(sender, "Ошибка базы данных: " + exception.getMessage());
+            error(sender, msg("commands.error.database", "Ошибка базы данных: {error}", "error", exception.getMessage()));
         } catch (IOException exception) {
             plugin.getLogger().warning("CivCraft legacy build failed: " + exception.getMessage());
-            error(sender, "Ошибка legacy-шаблона: " + exception.getMessage());
+            error(sender, msg("commands.error.template", "Ошибка legacy-шаблона: {error}", "error", exception.getMessage()));
         }
         return true;
     }
@@ -152,89 +134,86 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
     private void handleCiv(Player player, String[] args) throws SQLException {
         if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
             CivRecord civ = game.createCivilization(player, joinName(args, 2));
-            success(player, "Цивилизация <yellow>" + civ.name() + "</yellow> создана. Правительство: " + civ.government());
+            success(player, msg("commands.civ.created", "Цивилизация {name} создана. Правительство: {government}", "name", civ.name(), "government", civ.government()));
             return;
         }
         if (args.length >= 3 && args[1].equalsIgnoreCase("deposit")) {
             CivRecord civ = game.depositCiv(player, parseAmount(args[2]));
-            success(player, "Баланс цивилизации: <yellow>" + civ.coins() + "</yellow>.");
+            success(player, msg("commands.civ.balance", "Баланс цивилизации: {coins}.", "coins", civ.coins()));
             return;
         }
         if (args.length >= 3 && args[1].equalsIgnoreCase("withdraw")) {
             CivRecord civ = game.withdrawCiv(player, parseAmount(args[2]));
-            success(player, "Баланс цивилизации: <yellow>" + civ.coins() + "</yellow>.");
+            success(player, msg("commands.civ.balance", "Баланс цивилизации: {coins}.", "coins", civ.coins()));
             return;
         }
         ResidentProfile resident = game.resident(player);
         game.civ(resident).ifPresentOrElse(
-                civ -> player.sendMessage(miniMessage.deserialize("<gold>Цивилизация:</gold> <yellow>" + civ.name() + "</yellow> <gray>government=" + civ.government() + ", coins=" + civ.coins() + "</gray>")),
-                () -> error(player, "Вы не состоите в цивилизации. Используйте /civcraftmodern civ create <название>.")
+                civ -> send(player, msg("commands.civ.info", "&6Цивилизация: &e{name} &7government={government}, coins={coins}", "name", civ.name(), "government", civ.government(), "coins", civ.coins())),
+                () -> error(player, msg("commands.civ.none", "Вы не состоите в цивилизации. Используйте /civ create <название>."))
         );
     }
 
     private void handleTown(Player player, String[] args) throws SQLException {
         if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
             TownRecord town = game.createTown(player, joinName(args, 2));
-            success(player, "Город <yellow>" + town.name() + "</yellow> основан. Мэр: " + player.getName() + ", молотки: " + formatNumber(town.hammersPerHour()) + "/час, колбы: " + formatNumber(town.beakersPerHour()) + "/час, счастье: " + town.happiness() + " (" + town.happinessState() + ").");
+            success(player, msg("commands.town.created", "Город {name} основан. Мэр: {mayor}, молотки: {hammers}/час, колбы: {beakers}/час, счастье: {happiness} ({state}).", "name", town.name(), "mayor", player.getName(), "hammers", formatNumber(town.hammersPerHour()), "beakers", formatNumber(town.beakersPerHour()), "happiness", town.happiness(), "state", town.happinessState()));
             return;
         }
         if (args.length >= 3 && args[1].equalsIgnoreCase("deposit")) {
             TownRecord town = game.depositTown(player, parseAmount(args[2]));
-            success(player, "Баланс города: <yellow>" + town.coins() + "</yellow>.");
+            success(player, msg("commands.town.balance", "Баланс города: {coins}.", "coins", town.coins()));
             return;
         }
         if (args.length >= 3 && args[1].equalsIgnoreCase("withdraw")) {
             TownRecord town = game.withdrawTown(player, parseAmount(args[2]));
-            success(player, "Баланс города: <yellow>" + town.coins() + "</yellow>.");
+            success(player, msg("commands.town.balance", "Баланс города: {coins}.", "coins", town.coins()));
             return;
         }
         if (args.length >= 2 && args[1].equalsIgnoreCase("claim")) {
             TownClaimRecord claim = townClaims.claim(player);
-            success(player, "Чанк <yellow>" + claim.chunkX() + "," + claim.chunkZ() + "</yellow> заклаймлен городом #" + claim.townId() + ".");
+            success(player, msg("commands.town.claimed", "Чанк {chunk_x},{chunk_z} заклаймлен городом #{town_id}.", "chunk_x", claim.chunkX(), "chunk_z", claim.chunkZ(), "town_id", claim.townId()));
             return;
         }
         if (args.length >= 2 && args[1].equalsIgnoreCase("unclaim")) {
             townClaims.unclaim(player);
-            success(player, "Текущий чанк отклаймлен.");
+            success(player, msg("commands.town.unclaimed", "Текущий чанк отклаймлен."));
             return;
         }
         if (args.length >= 2 && args[1].equalsIgnoreCase("claims")) {
             int count = townClaims.claimCount(player);
-            player.sendMessage(miniMessage.deserialize("<gold>Клаймы города:</gold> <yellow>" + count + "/" + plugin.settings().maxTownClaims() + "</yellow>"));
+            send(player, msg("commands.town.claims", "&6Клаймы города: &e{count}/{max}", "count", count, "max", plugin.settings().maxTownClaims()));
             return;
         }
         ResidentProfile resident = game.resident(player);
         game.town(resident).ifPresentOrElse(
-                town -> player.sendMessage(miniMessage.deserialize("<gold>Город:</gold> <yellow>" + town.name() + "</yellow> <gray>level=" + town.level() + ", coins=" + town.coins() + ", hammers=" + formatNumber(town.hammersPerHour()) + "/hour, beakers=" + formatNumber(town.beakersPerHour()) + "/hour, money=" + formatNumber(town.moneyPerHour()) + "/hour, happiness=" + town.happiness() + " (" + town.happinessState() + ", x" + formatNumber(town.productionMultiplier()) + ")</gray>")),
-                () -> error(player, "У вас нет города. Используйте /civcraftmodern town create <название>.")
+                town -> send(player, msg("commands.town.info", "&6Город: &e{name} &7level={level}, coins={coins}, hammers={hammers}/hour, beakers={beakers}/hour, money={money}/hour, happiness={happiness} ({state}, x{multiplier})", "name", town.name(), "level", town.level(), "coins", town.coins(), "hammers", formatNumber(town.hammersPerHour()), "beakers", formatNumber(town.beakersPerHour()), "money", formatNumber(town.moneyPerHour()), "happiness", town.happiness(), "state", town.happinessState(), "multiplier", formatNumber(town.productionMultiplier()))),
+                () -> error(player, msg("commands.town.none", "У вас нет города. Используйте /town create <название>."))
         );
     }
 
     private void handleBuild(Player player, String[] args) throws IOException, SQLException {
-        if (!player.hasPermission("civcraft.build")) {
-            throw new IllegalArgumentException("Нет прав на строительство.");
-        }
         if (args.length >= 2 && args[1].equalsIgnoreCase("cancel")) {
             LegacyStructureService.CancelBuildResult result = legacyStructures.cancelActiveBuild(player);
-            success(player, "Стройка #" + result.build().id() + " отменена. В казну города возвращено " + result.refund() + " монет.");
+            success(player, msg("commands.build.cancelled", "Стройка #{id} отменена. В казну города возвращено {refund} монет.", "id", result.build().id(), "refund", result.refund()));
             return;
         }
         if (args.length >= 2 && args[1].equalsIgnoreCase("demolish")) {
             LegacyStructureService.DemolishBuildResult result = legacyStructures.demolishStructureAt(player);
-            success(player, "Постройка #" + result.build().id() + " разрушена. В казну города возвращено " + result.refund() + " монет.");
+            success(player, msg("commands.build.demolished", "Постройка #{id} разрушена. В казну города возвращено {refund} монет.", "id", result.build().id(), "refund", result.refund()));
             return;
         }
         if (args.length >= 2 && args[1].equalsIgnoreCase("info")) {
             legacyStructures.structureInfoAt(player.getLocation()).ifPresentOrElse(
                     info -> sendStructureInfo(player, info),
-                    () -> error(player, "В этом чанке нет постройки.")
+                    () -> error(player, msg("commands.build.no-structure", "В этом чанке нет постройки."))
             );
             return;
         }
         if (args.length >= 2 && args[1].equalsIgnoreCase("time")) {
             legacyStructures.activeBuildInfo(player).ifPresentOrElse(
                     info -> sendStructureTime(player, info),
-                    () -> error(player, "В вашем городе нет активной стройки.")
+                    () -> error(player, msg("commands.build.no-active", "В вашем городе нет активной стройки."))
             );
             return;
         }
@@ -242,84 +221,72 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
             List<String> structures = legacyStructures.listDefinitions(25).stream()
                     .map(definition -> definition.id() + "(" + definition.displayName() + ", cost=" + definition.cost() + ", hammers=" + definition.hammerCost() + ", beakers=" + definition.beakersPerHour() + "/h, happiness=" + definition.happiness() + ")")
                     .toList();
-            player.sendMessage(miniMessage.deserialize("<gold>Structures:</gold> <yellow>" + String.join(", ", structures) + "</yellow>"));
+            send(player, msg("commands.build.list", "&6Постройки: &e{list}", "list", String.join(", ", structures)));
             return;
         }
         if (args.length >= 2 && args[1].equalsIgnoreCase("legacy")) {
-            throw new IllegalArgumentException("Legacy .def сборка перенесена в /civadmin build <file>.");
+            throw new IllegalArgumentException(msg("commands.build.legacy-moved", "Legacy .def сборка перенесена в /civadmin build <file>."));
         }
-
         if (args.length >= 3 && args[1].equalsIgnoreCase("structure")) {
             String structureId = args[2];
             int y = args.length >= 4 ? parseBuildY(player, args[3]) : player.getLocation().getBlockY();
             String rotation = args.length >= 5 ? parseRotation(args[4]) : "0";
             legacyStructures.previewStructure(player, structureId, y, rotation);
-            success(player, "Фантомное превью постройки показано только вам. Напишите <yellow>yes</yellow>, чтобы начать строительство, или <yellow>no</yellow>, чтобы отменить.");
+            success(player, msg("commands.build.preview", "Фантомное превью постройки показано только вам. Напишите yes, чтобы начать строительство, или no, чтобы отменить."));
             return;
         }
-
         if (args.length >= 2) {
             if (args.length > 4) {
-                throw new IllegalArgumentException("Использование: /build <постройка> [y] [0|90|180|270]");
+                throw new IllegalArgumentException(msg("commands.build.usage", "Использование: /build <постройка> [y] [0|90|180|270]"));
             }
             String structureId = args[1];
             int y = args.length >= 3 ? parseBuildY(player, args[2]) : player.getLocation().getBlockY();
             String rotation = args.length >= 4 ? parseRotation(args[3]) : "0";
             legacyStructures.previewStructure(player, structureId, y, rotation);
-            success(player, "Фантомное превью постройки показано только вам. Напишите <yellow>yes</yellow>, чтобы начать строительство, или <yellow>no</yellow>, чтобы отменить.");
+            success(player, msg("commands.build.preview", "Фантомное превью постройки показано только вам. Напишите yes, чтобы начать строительство, или no, чтобы отменить."));
             return;
         }
-
-        player.sendMessage(miniMessage.deserialize("<yellow>/b <id> [y] [0|90|180|270]</yellow> <gray>- превью постройки</gray>"));
-        player.sendMessage(miniMessage.deserialize("<yellow>/b cancel</yellow> <gray>- отменить активную стройку города и вернуть 90% стоимости</gray>"));
-        player.sendMessage(miniMessage.deserialize("<yellow>/b demolish</yellow> <gray>- разрушить постройку в текущем чанке и вернуть 50% стоимости в казну</gray>"));
-        player.sendMessage(miniMessage.deserialize("<yellow>/b info</yellow> <gray>- инфа о постройке в текущем чанке</gray>"));
-        player.sendMessage(miniMessage.deserialize("<yellow>/b time</yellow> <gray>- прогресс активной стройки города</gray>"));
+        helpBuild(player);
     }
 
     private void handleCivAdmin(Player player, String[] args) throws IOException, SQLException {
-        if (!player.hasPermission("civcraft.admin")) {
-            throw new IllegalArgumentException("Нет прав.");
+        if (!player.isOp()) {
+            throw new IllegalArgumentException(msg("commands.admin.op-only", "Эта команда доступна только OP-игроку."));
+        }
+        if (args.length >= 2 && args[1].equalsIgnoreCase("reload")) {
+            plugin.reloadModernConfig();
+            economy.reload(plugin.settings());
+            game.updateSettings(plugin.settings());
+            legacyStructures.updateSettings(plugin.settings());
+            research.updateSettings(plugin.settings());
+            townClaims.updateSettings(plugin.settings());
+            plugin.reloadIntegrations();
+            if (campNpcMenus != null) {
+                campNpcMenus.reloadEverything();
+            }
+            success(player, msg("commands.admin.reload", "Конфигурация перезагружена."));
+            return;
+        }
+        if (args.length >= 2 && args[1].equalsIgnoreCase("integrations")) {
+            send(player, msg("commands.admin.integrations-header", "&eИнтеграции CivCraft:"));
+            plugin.integrations().statusLines().forEach(line -> player.sendMessage(net.kyori.adventure.text.minimessage.MiniMessage.miniMessage().deserialize(line)));
+            return;
+        }
+        if (args.length >= 3 && args[1].equalsIgnoreCase("npc") && args[2].equalsIgnoreCase("reload")) {
+            if (campNpcMenus != null) {
+                campNpcMenus.reloadEverything();
+            }
+            success(player, msg("commands.admin.npc-reload", "Camp NPC menus перезагружены."));
+            return;
         }
         if (args.length >= 3 && args[1].equalsIgnoreCase("build")) {
             int y = args.length >= 4 ? parseBuildY(player, args[3]) : player.getLocation().getBlockY();
             String rotation = args.length >= 5 ? parseRotation(args[4]) : "0";
             QueuedLegacyBuild build = legacyStructures.buildAdminLegacy(player, args[2], y, rotation);
-            success(player, "Legacy .def постройка #" + build.id() + " запущена: " + build.queuedBlocks() + " блоков, размер " + build.sizeX() + "x" + build.sizeY() + "x" + build.sizeZ());
+            success(player, msg("commands.admin.build-started", "Legacy .def постройка #{id} запущена: {blocks} блоков, размер {size_x}x{size_y}x{size_z}", "id", build.id(), "blocks", build.queuedBlocks(), "size_x", build.sizeX(), "size_y", build.sizeY(), "size_z", build.sizeZ()));
             return;
         }
-        player.sendMessage(miniMessage.deserialize("<yellow>/civadmin build <file> [y] [0|90|180|270]</yellow> <gray>- legacy .def сборка для админских задач</gray>"));
-    }
-
-    private void sendStructureInfo(Player player, StorageBootstrap.StructureBuildView info) {
-        player.sendMessage(miniMessage.deserialize("<gold>Постройка:</gold> <yellow>" + info.displayName() + "</yellow> <gray>#" + info.id() + "</gray>"));
-        player.sendMessage(miniMessage.deserialize("<gray>Город: " + (info.townName() == null ? "-" : info.townName()) + ", status=" + info.status() + ", cost=" + info.cost() + ", chunk=" + info.chunkX() + "," + info.chunkZ() + "</gray>"));
-        player.sendMessage(miniMessage.deserialize("<gray>Origin: " + info.world() + " " + info.x() + " " + info.y() + " " + info.z() + ", hammers=" + formatNumber(info.totalHammers()) + ", production=" + formatNumber(info.hammersPerHour()) + "/hour</gray>"));
-    }
-
-    private void sendStructureTime(Player player, StorageBootstrap.StructureBuildView info) {
-        long now = System.currentTimeMillis();
-        player.sendMessage(miniMessage.deserialize("<gold>Стройка:</gold> <yellow>" + info.displayName() + "</yellow> <gray>#" + info.id() + "</gray>"));
-        player.sendMessage(miniMessage.deserialize("<gray>Готово: " + String.format(Locale.ROOT, "%.1f", info.progressPercent(now)) + "% | осталось: " + formatDuration(info.remainingMillis(now)) + "</gray>"));
-    }
-
-    private int parseBuildY(Player player, String input) {
-        try {
-            int y = Integer.parseInt(input);
-            if (y < player.getWorld().getMinHeight() || y >= player.getWorld().getMaxHeight()) {
-                throw new NumberFormatException(input);
-            }
-            return y;
-        } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException("Y должен быть целым числом в пределах высоты мира.");
-        }
-    }
-
-    private String parseRotation(String input) {
-        if (List.of("0", "90", "180", "270").contains(input)) {
-            return input;
-        }
-        throw new IllegalArgumentException("Поворот должен быть только 0, 90, 180 или 270.");
+        helpAdmin(player);
     }
 
     private void handleResearch(Player player, String[] args) throws SQLException {
@@ -327,30 +294,57 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
             List<String> techs = research.listTechs(25).stream()
                     .map(tech -> tech.id() + "(" + tech.name() + ", beakers=" + tech.beakerCost() + ", coins=" + tech.coinCost() + ")")
                     .toList();
-            player.sendMessage(miniMessage.deserialize("<gold>Технологии:</gold> <yellow>" + String.join(", ", techs) + "</yellow>"));
+            send(player, msg("commands.research.list", "&6Технологии: &e{list}", "list", String.join(", ", techs)));
             return;
         }
         if (args.length >= 3 && args[1].equalsIgnoreCase("start")) {
             TechDefinition definition = research.startResearch(player, args[2]);
-            success(player, "Исследование <yellow>" + definition.name() + "</yellow> начато. Нужно beakers: " + definition.beakerCost());
+            success(player, msg("commands.research.started", "Исследование {name} начато. Нужно beakers: {beakers}", "name", definition.name(), "beakers", definition.beakerCost()));
             return;
         }
         ResidentProfile resident = game.resident(player);
         research.progress(resident).ifPresentOrElse(
-                progress -> player.sendMessage(miniMessage.deserialize("<gold>Исследование:</gold> <yellow>" + progress.techId() + "</yellow> <gray>" + Math.round(progress.progress()) + "/" + Math.round(progress.requiredBeakers()) + " (" + Math.round(progress.percent()) + "%)</gray>")),
-                () -> error(player, "Активного исследования нет. Используйте /research list и /research start <id>.")
+                progress -> send(player, msg("commands.research.progress", "&6Исследование: &e{tech} &7{progress}/{required} ({percent}%)", "tech", progress.techId(), "progress", Math.round(progress.progress()), "required", Math.round(progress.requiredBeakers()), "percent", Math.round(progress.percent()))),
+                () -> error(player, msg("commands.research.none", "Активного исследования нет. Используйте /research list и /research start <id>."))
         );
     }
 
-    private void showResident(Player player) throws SQLException {
-        ResidentProfile resident = game.resident(player);
-        player.sendMessage(miniMessage.deserialize("<gold>Resident:</gold> <yellow>" + resident.name() + "</yellow> <gray>" + economy.currencyId() + "=" + Math.round(economy.balance(player)) + "</gray>"));
-        player.sendMessage(miniMessage.deserialize("<gray>civ=" + value(resident.civId()) + ", town=" + value(resident.townId()) + ", camp=" + value(resident.campId()) + "</gray>"));
+    private void sendStructureInfo(Player player, StorageBootstrap.StructureBuildView info) {
+        send(player, msg("commands.build.info.line1", "&6Постройка: &e{name} &7#{id}", "name", info.displayName(), "id", info.id()));
+        send(player, msg("commands.build.info.line2", "&7Город: {town}, status={status}, cost={cost}, chunk={chunk_x},{chunk_z}", "town", info.townName() == null ? "-" : info.townName(), "status", info.status(), "cost", info.cost(), "chunk_x", info.chunkX(), "chunk_z", info.chunkZ()));
+        send(player, msg("commands.build.info.line3", "&7Origin: {world} {x} {y} {z}, hammers={hammers}, production={production}/hour", "world", info.world(), "x", info.x(), "y", info.y(), "z", info.z(), "hammers", formatNumber(info.totalHammers()), "production", formatNumber(info.hammersPerHour())));
+    }
+
+    private void sendStructureTime(Player player, StorageBootstrap.StructureBuildView info) {
+        long now = System.currentTimeMillis();
+        send(player, msg("commands.build.time.line1", "&6Стройка: &e{name} &7#{id}", "name", info.displayName(), "id", info.id()));
+        send(player, msg("commands.build.time.line2", "&7Готово: {percent}% | осталось: {remaining}", "percent", String.format(Locale.ROOT, "%.1f", info.progressPercent(now)), "remaining", formatDuration(info.remainingMillis(now))));
+    }
+
+    private void helpBuild(Player player) {
+        for (String line : lang.list("commands.help.build", List.of(
+                "&e/b <id> [y] [0|90|180|270]&7 - превью постройки",
+                "&e/b cancel&7 - отменить активную стройку города и вернуть 90% стоимости",
+                "&e/b demolish&7 - разрушить постройку в текущем чанке и вернуть 50% стоимости в казну",
+                "&e/b info&7 - инфа о постройке в текущем чанке",
+                "&e/b time&7 - прогресс активной стройки города"))) {
+            send(player, line);
+        }
+    }
+
+    private void helpAdmin(Player player) {
+        for (String line : lang.list("commands.help.admin", List.of(
+                "&e/civadmin reload&7 - перезагрузить конфиги",
+                "&e/civadmin integrations&7 - статус интеграций",
+                "&e/civadmin npc reload&7 - перезагрузить NPC/GUI лагерей",
+                "&e/civadmin build <file> [y] [0|90|180|270]&7 - legacy .def сборка"))) {
+            send(player, line);
+        }
     }
 
     private Player requirePlayer(CommandSender sender) {
         if (!(sender instanceof Player player)) {
-            throw new IllegalArgumentException("Эта команда доступна только игроку.");
+            throw new IllegalArgumentException(msg("commands.error.player-only", "Эта команда доступна только игроку."));
         }
         return player;
     }
@@ -370,12 +364,27 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
             }
             return amount;
         } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException("Сумма должна быть положительным целым числом.");
+            throw new IllegalArgumentException(msg("commands.error.positive-int", "Сумма должна быть положительным целым числом."));
         }
     }
 
-    private String value(Long id) {
-        return id == null ? "-" : id.toString();
+    private int parseBuildY(Player player, String input) {
+        try {
+            int y = Integer.parseInt(input);
+            if (y < player.getWorld().getMinHeight() || y >= player.getWorld().getMaxHeight()) {
+                throw new NumberFormatException(input);
+            }
+            return y;
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(msg("commands.error.y", "Y должен быть целым числом в пределах высоты мира."));
+        }
+    }
+
+    private String parseRotation(String input) {
+        if (List.of("0", "90", "180", "270").contains(input)) {
+            return input;
+        }
+        throw new IllegalArgumentException(msg("commands.error.rotation", "Поворот должен быть только 0, 90, 180 или 270."));
     }
 
     private String formatNumber(double value) {
@@ -387,7 +396,7 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
 
     private String formatDuration(long millis) {
         if (millis <= 0L) {
-            return "сразу";
+            return msg("commands.common.now", "сразу");
         }
         long totalSeconds = Math.max(1L, (long) Math.ceil(millis / 1000.0));
         long hours = totalSeconds / 3600L;
@@ -402,43 +411,45 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
         return seconds + "с";
     }
 
-    private void help(CommandSender sender, String label) {
-        sender.sendMessage(miniMessage.deserialize("<gold>CivCraft Leaf playable build</gold>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/" + label + " resident</yellow> <gray>- профиль игрока</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/c</yellow> <gray>- команды лагеря</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/" + label + " civ create <name></yellow> <gray>- создать цивилизацию</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/" + label + " town create <name></yellow> <gray>- создать город</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/" + label + " town claim|unclaim|claims</yellow> <gray>- клаймы территории города</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/" + label + " town deposit|withdraw <amount></yellow> <gray>- банк города</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/" + label + " civ deposit|withdraw <amount></yellow> <gray>- банк цивилизации</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/build <id> [y] [0|90|180|270]</yellow> <gray>- фантомное превью, затем yes/no</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/b cancel|demolish|info|time</yellow> <gray>- управление стройкой</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/civadmin build <file></yellow> <gray>- legacy .def сборка для админа</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/" + label + " research list|start|status</yellow> <gray>- технологии цивилизации</gray>"));
-        sender.sendMessage(miniMessage.deserialize("<yellow>/" + label + " integrations</yellow> <gray>- статус интеграций</gray>"));
+    private void help(CommandSender sender, String commandName) {
+        String key = commandName.equalsIgnoreCase("civadmin") ? "commands.help.admin" : "commands.help.player";
+        List<String> fallback = commandName.equalsIgnoreCase("civadmin")
+                ? List.of("&6CivCraft admin", "&e/civadmin reload&7 - перезагрузить конфиги", "&e/civadmin integrations&7 - статус интеграций", "&e/civadmin npc reload&7 - перезагрузить NPC/GUI лагерей", "&e/civadmin build <file>&7 - legacy .def сборка")
+                : List.of("&6CivCraft", "&e/camp&7 - команды лагеря", "&e/build&7 - постройки", "&e/research&7 - технологии", "&e/civ&7 - цивилизация", "&e/town&7 - город");
+        for (String line : lang.list(key, fallback)) {
+            send(sender, line);
+        }
     }
 
     private void success(CommandSender sender, String message) {
-        sender.sendMessage(legacyComponent("§a" + stripOuterLegacyColor(message)));
+        send(sender, "§a" + stripOuterColor(message));
     }
 
     private void error(CommandSender sender, String message) {
-        sender.sendMessage(legacyComponent("§c" + stripOuterLegacyColor(message)));
+        send(sender, "§c" + stripOuterColor(message));
     }
 
-    private net.kyori.adventure.text.Component legacyComponent(String message) {
-        return LegacyComponentSerializer.legacySection().deserialize(colorizeLegacy(message == null ? "" : message));
+    private void send(CommandSender sender, String message) {
+        sender.sendMessage(component(message));
     }
 
-    private String colorizeLegacy(String message) {
+    private Component component(String message) {
+        return legacy.deserialize(colorize(message == null ? "" : message));
+    }
+
+    private String msg(String key, String fallback, Object... replacements) {
+        return lang.msg(key, fallback, replacements);
+    }
+
+    private String colorize(String message) {
         return message == null ? "" : message.replace('&', '§');
     }
 
-    private String stripOuterLegacyColor(String message) {
+    private String stripOuterColor(String message) {
         if (message == null) {
             return "";
         }
-        String colored = colorizeLegacy(message);
+        String colored = colorize(message);
         if (colored.length() >= 2 && colored.charAt(0) == '§') {
             return colored.substring(2);
         }
@@ -450,9 +461,6 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
         String primary = alias.toLowerCase(Locale.ROOT);
         if (List.of("build", "b").contains(primary) && args.length == 1) {
             return List.of("list", "cancel", "demolish", "info", "time", "s_townhall", "s_capitol");
-        }
-        if (primary.equals("civadmin") && args.length == 1) {
-            return List.of("build");
         }
         if (List.of("research", "tech").contains(primary) && args.length == 1) {
             return List.of("list", "start", "status");
@@ -466,20 +474,16 @@ public final class CivCraftCommand implements CommandExecutor, TabCompleter {
         if (List.of("town", "t").contains(primary) && args.length == 1) {
             return List.of("create", "info", "claim", "unclaim", "claims", "deposit", "withdraw");
         }
-        if (args.length == 1) {
-            return List.of("resident", "camp", "c", "civ", "town", "build", "b", "civadmin", "research", "integrations", "reload");
-        }
-        if (args.length == 2 && args[0].equalsIgnoreCase("research")) {
-            return List.of("list", "start", "status");
-        }
-        if (args.length == 2 && args[0].equalsIgnoreCase("camp")) {
-            return campService.completions(1);
-        }
-        if (args.length == 2 && args[0].equalsIgnoreCase("civ")) {
-            return List.of("create", "info", "deposit", "withdraw");
-        }
-        if (args.length == 2 && args[0].equalsIgnoreCase("town")) {
-            return List.of("create", "info", "claim", "unclaim", "claims", "deposit", "withdraw");
+        if (primary.equals("civadmin")) {
+            if (!(sender instanceof Player player) || !player.isOp()) {
+                return List.of();
+            }
+            if (args.length == 1) {
+                return List.of("reload", "integrations", "npc", "build");
+            }
+            if (args.length == 2 && args[0].equalsIgnoreCase("npc")) {
+                return List.of("reload");
+            }
         }
         return List.of();
     }

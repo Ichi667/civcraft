@@ -15,8 +15,14 @@ settings:
 # LOCATION_VISIT - поход в координаты; координаты показываются через {coordinates}
 #
 # Типы rewards:
-# MONEY, VANILLA_ITEM/ITEM, ITEMSADDER, MMOITEMS, CAMP_EXPERIENCE, CONTROL_HP,
+# MONEY, VANILLA_ITEM/ITEM, ITEMSADDER, MMOITEMS, CIVCRAFT_ITEM, CAMP_EXPERIENCE, CONTROL_HP,
 # UPGRADE, HEALTH_BONUS, DAMAGE_BONUS, COMMAND
+#
+# Награда CivCraft item из папки custom-items:
+# rewards:
+#   - type: CIVCRAFT_ITEM
+#     id: bronze_sword
+#     amount: 1
 levels:
   '1':
     sugar_cane_640:
@@ -42,6 +48,9 @@ levels:
         - type: VANILLA_ITEM
           material: BREAD
           amount: 16
+        - type: CIVCRAFT_ITEM
+          id: camp_ration
+          amount: 2
     wheat_640:
       title: 'Собрать 640 пшеницы'
       description: 'Собрано {progress}/{target} пшеницы'

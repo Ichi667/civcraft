@@ -58,8 +58,19 @@ integrations:
     async-paste-max-blocks: 250000
   packetevents:
     enabled: false
-  typewriter:
-    enabled: false
+
+camp-npc:
+  sync-interval-seconds: 1
+  npc:
+    enabled: true
+    display-name: '<gold>{camp_name}</gold>'
+    # Можно указать ник/значение скина, которое понимает FancyNpcs.
+    skin: ''
+    # Для скинов через texture/signature, если используешь такой формат.
+    skin-texture: ''
+    skin-signature: ''
+    # Если true, NPC будет включать режим FancyNpcs turn/look at nearest player.
+    look-at-nearest-player: false
 
 foundation-items:
   camp:

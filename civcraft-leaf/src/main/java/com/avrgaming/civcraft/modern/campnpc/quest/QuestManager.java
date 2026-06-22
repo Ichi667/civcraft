@@ -3,6 +3,7 @@ package com.avrgaming.civcraft.modern.campnpc.quest;
 import com.avrgaming.civcraft.modern.campnpc.bridge.CivCraftBridge;
 import com.avrgaming.civcraft.modern.campnpc.bridge.PlayerCampInfo;
 import com.avrgaming.civcraft.modern.campnpc.reward.QuestRewardService;
+import com.avrgaming.civcraft.modern.campnpc.lang.Lang;
 import com.avrgaming.civcraft.modern.campnpc.storage.PluginStorage;
 import com.avrgaming.civcraft.modern.campnpc.util.ItemsAdderHook;
 import java.io.File;
@@ -29,16 +30,18 @@ public final class QuestManager {
     private final PluginStorage storage;
     private final CivCraftBridge civCraft;
     private final QuestRewardService rewards;
+    private final Lang lang;
     private final ItemsAdderHook itemsAdder = new ItemsAdderHook();
     private final Map<Integer, List<QuestDefinition>> questsByLevel = new HashMap<>();
     private final Map<String, Long> locationProgressCooldowns = new ConcurrentHashMap<>();
     private int visibleQuestLimit = 21;
 
-    public QuestManager(JavaPlugin plugin, PluginStorage storage, CivCraftBridge civCraft, QuestRewardService rewards) {
+    public QuestManager(JavaPlugin plugin, PluginStorage storage, CivCraftBridge civCraft, QuestRewardService rewards, Lang lang) {
         this.plugin = plugin;
         this.storage = storage;
         this.civCraft = civCraft;
         this.rewards = rewards;
+        this.lang = lang;
     }
 
     public void reload() {
@@ -139,41 +142,41 @@ public final class QuestManager {
     }
 
     public boolean selectQuest(Player player, long campId, String questId) {
-        player.sendMessage("§eВыбор квестов отключён. Все квесты текущего уровня лагеря доступны сразу.");
+        player.sendMessage(lang.msg("camp-npc.quest-selection-disabled", "&eВыбор квестов отключён. Все квесты текущего уровня лагеря доступны сразу."));
         return false;
     }
 
     public SubmitResult submitByClick(Player player, long campId, String questId) {
         Optional<QuestDefinition> optionalQuest = quest(questId);
         if (optionalQuest.isEmpty()) {
-            return new SubmitResult(false, "§cКвест не найден.");
+            return new SubmitResult(false, lang.msg("camp-npc.quest-not-found", "&cКвест не найден."));
         }
         QuestDefinition quest = optionalQuest.get();
         if (!isQuestAvailableForCamp(campId, quest)) {
-            return new SubmitResult(false, "§cЭтот квест недоступен на текущем уровне лагеря.");
+            return new SubmitResult(false, lang.msg("camp-npc.quest-wrong-level", "&cЭтот квест недоступен на текущем уровне лагеря."));
         }
         if (!quest.objective().isItemDelivery()) {
-            return new SubmitResult(false, "§eЭтот квест выполняется автоматически, не сдачей предметов.");
+            return new SubmitResult(false, lang.msg("camp-npc.quest-auto-only", "&eЭтот квест выполняется автоматически, не сдачей предметов."));
         }
         return submitItems(player, campId, quest);
     }
 
     public SubmitResult submitItems(Player player, long campId, QuestDefinition quest) {
         if (!isQuestAvailableForCamp(campId, quest)) {
-            return new SubmitResult(false, "§cЭтот квест недоступен на текущем уровне лагеря.");
+            return new SubmitResult(false, lang.msg("camp-npc.quest-wrong-level", "&cЭтот квест недоступен на текущем уровне лагеря."));
         }
         QuestProgress progress = progress(campId, quest.id());
         if (progress.completed()) {
-            return new SubmitResult(false, "§eКвест уже выполнен.");
+            return new SubmitResult(false, lang.msg("camp-npc.quest-already-completed", "&eКвест уже выполнен."));
         }
         int remaining = quest.target() - progress.amount();
         if (remaining <= 0) {
             completeQuest(player, campId, quest);
-            return new SubmitResult(true, "§aКвест выполнен.");
+            return new SubmitResult(true, lang.msg("camp-npc.quest-completed", "&aКвест выполнен."));
         }
         int removed = removeMatching(player, quest, remaining);
         if (removed <= 0) {
-            return new SubmitResult(false, "§cУ тебя нет нужных предметов для сдачи.");
+            return new SubmitResult(false, lang.msg("camp-npc.quest-no-items", "&cУ тебя нет нужных предметов для сдачи."));
         }
         return addProgress(player, campId, quest, removed, "§aСдано " + removed + ".");
     }
@@ -213,7 +216,7 @@ public final class QuestManager {
     }
 
     public boolean reroll(Player player, long campId, boolean force) {
-        player.sendMessage("§eОбновление квестов отключено. Квесты зависят только от уровня лагеря.");
+        player.sendMessage(lang.msg("camp-npc.quest-reroll-disabled", "&eОбновление квестов отключено. Квесты зависят только от уровня лагеря."));
         return false;
     }
 
@@ -223,11 +226,11 @@ public final class QuestManager {
 
     private SubmitResult addProgress(Player player, long campId, QuestDefinition quest, int amount, String prefixMessage) {
         if (!isQuestAvailableForCamp(campId, quest)) {
-            return new SubmitResult(false, "§cЭтот квест недоступен на текущем уровне лагеря.");
+            return new SubmitResult(false, lang.msg("camp-npc.quest-wrong-level", "&cЭтот квест недоступен на текущем уровне лагеря."));
         }
         QuestProgress progress = progress(campId, quest.id());
         if (progress.completed()) {
-            return new SubmitResult(false, "§eКвест уже выполнен.");
+            return new SubmitResult(false, lang.msg("camp-npc.quest-already-completed", "&eКвест уже выполнен."));
         }
         int newAmount = Math.min(quest.target(), progress.amount() + Math.max(0, amount));
         boolean completed = newAmount >= quest.target();
@@ -235,16 +238,16 @@ public final class QuestManager {
             setProgress(connection, campId, quest.id(), newAmount, completed, progress.rewarded());
         } catch (SQLException exception) {
             plugin.getLogger().warning("Unable to save quest progress: " + exception.getMessage());
-            return new SubmitResult(false, "§cОшибка сохранения прогресса.");
+            return new SubmitResult(false, lang.msg("camp-npc.quest-save-error", "&cОшибка сохранения прогресса."));
         }
         if (completed) {
             completeQuest(player, campId, quest);
-            return new SubmitResult(true, "§aКвест выполнен.");
+            return new SubmitResult(true, lang.msg("camp-npc.quest-completed", "&aКвест выполнен."));
         }
         if (prefixMessage != null) {
-            return new SubmitResult(true, prefixMessage + " Прогресс: " + newAmount + "/" + quest.target());
+            return new SubmitResult(true, lang.msg("camp-npc.quest-submitted", "&aСдано {amount}. Прогресс: {progress}/{target}", "amount", String.valueOf(amount), "progress", String.valueOf(newAmount), "target", String.valueOf(quest.target())));
         }
-        return new SubmitResult(true, "§aПрогресс: " + newAmount + "/" + quest.target());
+        return new SubmitResult(true, lang.msg("camp-npc.quest-progress", "&aПрогресс: {progress}/{target}", "progress", String.valueOf(newAmount), "target", String.valueOf(quest.target())));
     }
 
     private void completeQuest(Player player, long campId, QuestDefinition quest) {

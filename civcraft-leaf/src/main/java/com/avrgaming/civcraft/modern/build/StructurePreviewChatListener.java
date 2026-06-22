@@ -1,5 +1,6 @@
 package com.avrgaming.civcraft.modern.build;
 
+import com.avrgaming.civcraft.modern.campnpc.lang.Lang;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.io.IOException;
 import java.sql.SQLException;
@@ -14,10 +15,16 @@ import org.bukkit.plugin.java.JavaPlugin;
 public final class StructurePreviewChatListener implements Listener {
     private final JavaPlugin plugin;
     private final LegacyStructureService structures;
+    private final Lang lang;
 
     public StructurePreviewChatListener(JavaPlugin plugin, LegacyStructureService structures) {
+        this(plugin, structures, new Lang(plugin));
+    }
+
+    public StructurePreviewChatListener(JavaPlugin plugin, LegacyStructureService structures, Lang lang) {
         this.plugin = plugin;
         this.structures = structures;
+        this.lang = lang;
     }
 
     @EventHandler
@@ -30,7 +37,7 @@ public final class StructurePreviewChatListener implements Listener {
         event.setCancelled(true);
         String message = PlainTextComponentSerializer.plainText().serialize(event.message()).trim().toLowerCase(Locale.ROOT);
         if (!message.equals("yes") && !message.equals("no")) {
-            plugin.getServer().getScheduler().runTask(plugin, () -> player.sendMessage("Введите yes, чтобы начать строительство, или no, чтобы отменить превью."));
+            plugin.getServer().getScheduler().runTask(plugin, () -> player.sendMessage(lang.component("build.preview-confirm-again", "&eВведите yes, чтобы начать строительство, или no, чтобы отменить превью.")));
             return;
         }
 
@@ -41,19 +48,20 @@ public final class StructurePreviewChatListener implements Listener {
             }
             try {
                 QueuedLegacyBuild build = structures.confirmPreview(player);
-                player.sendMessage("Строительство начато. Постройка #" + build.id()
-                        + ", чанковые блоки: " + build.queuedBlocks()
-                        + ", молотки: " + formatNumber(build.totalHammers())
-                        + ", город: " + formatNumber(build.hammersPerHour()) + "/час"
-                        + ", время: " + formatDuration(build.durationMillis()) + ".");
+                player.sendMessage(lang.component("build.started", "&aСтроительство начато. Постройка #{id}, чанковые блоки: {blocks}, молотки: {hammers}, город: {production}/час, время: {time}.",
+                        "id", build.id(),
+                        "blocks", build.queuedBlocks(),
+                        "hammers", formatNumber(build.totalHammers()),
+                        "production", formatNumber(build.hammersPerHour()),
+                        "time", formatDuration(build.durationMillis())));
             } catch (IllegalArgumentException exception) {
-                player.sendMessage("Ошибка: " + exception.getMessage());
+                player.sendMessage(lang.component("build.error", "&cОшибка: {error}", "error", exception.getMessage()));
             } catch (SQLException exception) {
                 plugin.getLogger().warning("CivCraft preview build failed: " + exception.getMessage());
-                player.sendMessage("Ошибка базы данных: " + exception.getMessage());
+                player.sendMessage(lang.component("build.database-error", "&cОшибка базы данных: {error}", "error", exception.getMessage()));
             } catch (IOException exception) {
                 plugin.getLogger().warning("CivCraft preview template failed: " + exception.getMessage());
-                player.sendMessage("Ошибка схематики: " + exception.getMessage());
+                player.sendMessage(lang.component("build.schematic-error", "&cОшибка схематики: {error}", "error", exception.getMessage()));
             }
         });
     }
@@ -72,7 +80,7 @@ public final class StructurePreviewChatListener implements Listener {
 
     private String formatDuration(long millis) {
         if (millis <= 0L) {
-            return "сразу";
+            return lang.msg("build.time-now", "сразу");
         }
         long totalSeconds = Math.max(1L, (long) Math.ceil(millis / 1000.0));
         long hours = totalSeconds / 3600L;

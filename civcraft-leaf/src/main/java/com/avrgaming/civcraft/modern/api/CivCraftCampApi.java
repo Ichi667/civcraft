@@ -1,6 +1,7 @@
 package com.avrgaming.civcraft.modern.api;
 
 import com.avrgaming.civcraft.modern.config.ModernCivCraftSettings;
+import com.avrgaming.civcraft.modern.economy.CivCraftEconomyService;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -15,20 +16,29 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.OfflinePlayer;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class CivCraftCampApi {
     private static final int FALLBACK_SCAN_RADIUS_BLOCKS = 48;
 
     private final JavaPlugin plugin;
+    private final CivCraftEconomyService economy;
     private ModernCivCraftSettings settings;
 
     public CivCraftCampApi(JavaPlugin plugin, ModernCivCraftSettings settings) {
+        this(plugin, settings, null);
+    }
+
+    public CivCraftCampApi(JavaPlugin plugin, ModernCivCraftSettings settings, CivCraftEconomyService economy) {
         this.plugin = plugin;
         this.settings = settings;
+        this.economy = economy;
     }
 
     public void updateSettings(ModernCivCraftSettings settings) {
@@ -41,6 +51,7 @@ public final class CivCraftCampApi {
             ensureColumn(connection, "camps", "npc_marker_x", "INTEGER");
             ensureColumn(connection, "camps", "npc_marker_y", "INTEGER");
             ensureColumn(connection, "camps", "npc_marker_z", "INTEGER");
+            ensureColumn(connection, "camps", "control_max_hp", "INTEGER NOT NULL DEFAULT 50");
         } catch (SQLException exception) {
             plugin.getLogger().warning("Unable to initialize CivCraft camp API storage: " + exception.getMessage());
         }
@@ -158,6 +169,166 @@ public final class CivCraftCampApi {
         } catch (SQLException exception) {
             plugin.getLogger().warning("Unable to check camp NPC marker: " + exception.getMessage());
             return false;
+        }
+    }
+
+
+
+    public int getCampLevel(long campId) {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("SELECT level FROM camps WHERE id = ? LIMIT 1")) {
+            statement.setLong(1, campId);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() ? Math.max(1, rs.getInt("level")) : 1;
+            }
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Unable to load camp level: " + exception.getMessage());
+            return 1;
+        }
+    }
+
+
+    public Optional<Location> getCampFoodChestLocation(long campId) {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT food_chest_world, food_chest_x, food_chest_y, food_chest_z
+                FROM camps
+                WHERE id = ?
+                LIMIT 1
+                """)) {
+            statement.setLong(1, campId);
+            try (ResultSet rs = statement.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                String worldName = rs.getString("food_chest_world");
+                if (worldName == null || worldName.isBlank()) {
+                    return Optional.empty();
+                }
+                World world = Bukkit.getWorld(worldName);
+                if (world == null) {
+                    return Optional.empty();
+                }
+                return Optional.of(new Location(world, rs.getInt("food_chest_x"), rs.getInt("food_chest_y"), rs.getInt("food_chest_z")));
+            }
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Unable to load camp food chest: " + exception.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    public Optional<UUID> getCampLeaderUuid(long campId) {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("SELECT owner_uuid FROM camps WHERE id = ? LIMIT 1")) {
+            statement.setLong(1, campId);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() ? Optional.of(UUID.fromString(rs.getString("owner_uuid"))) : Optional.empty();
+            }
+        } catch (SQLException | IllegalArgumentException exception) {
+            plugin.getLogger().warning("Unable to load camp leader: " + exception.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    public void addCampLeaderCoins(long campId, long amount) {
+        if (amount <= 0L) {
+            return;
+        }
+        Optional<UUID> leaderUuid = getCampLeaderUuid(campId);
+        if (leaderUuid.isEmpty()) {
+            return;
+        }
+        if (economy != null) {
+            try {
+                OfflinePlayer offlineLeader = Bukkit.getOfflinePlayer(leaderUuid.get());
+                if (offlineLeader instanceof Player onlineLeader) {
+                    economy.deposit(onlineLeader, amount, "camp quest reward");
+                    return;
+                }
+                economy.deposit(offlineLeader, amount, "camp quest reward");
+                return;
+            } catch (SQLException exception) {
+                plugin.getLogger().warning("Economy deposit failed for camp leader, using local SQLite fallback: " + exception.getMessage());
+            } catch (RuntimeException exception) {
+                plugin.getLogger().warning("Economy deposit runtime error for camp leader, using local SQLite fallback: " + exception.getMessage());
+            }
+        }
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
+                UPDATE residents
+                SET coins = coins + ?, updated_at = ?
+                WHERE uuid = ?
+                """)) {
+            statement.setLong(1, amount);
+            statement.setLong(2, System.currentTimeMillis());
+            statement.setString(3, leaderUuid.get().toString());
+            statement.executeUpdate();
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Unable to add camp leader coins: " + exception.getMessage());
+        }
+    }
+
+    public void addCampExperience(long campId, int amount) {
+        if (amount <= 0) {
+            return;
+        }
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
+                UPDATE camps
+                SET experience = experience + ?,
+                    level = CASE
+                        WHEN experience + ? >= 1200 THEN 5
+                        WHEN experience + ? >= 600 THEN 4
+                        WHEN experience + ? >= 300 THEN 3
+                        WHEN experience + ? >= 100 THEN 2
+                        ELSE 1
+                    END
+                WHERE id = ?
+                """)) {
+            statement.setInt(1, amount);
+            statement.setInt(2, amount);
+            statement.setInt(3, amount);
+            statement.setInt(4, amount);
+            statement.setInt(5, amount);
+            statement.setLong(6, campId);
+            statement.executeUpdate();
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Unable to add camp experience: " + exception.getMessage());
+        }
+    }
+
+    public void addCampControlHp(long campId, int amount) {
+        if (amount == 0) {
+            return;
+        }
+        initializeStorage();
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
+                UPDATE camps
+                SET control_hp = MAX(1, control_hp + ?),
+                    control_max_hp = MAX(1, control_max_hp + ?)
+                WHERE id = ?
+                """)) {
+            statement.setInt(1, amount);
+            statement.setInt(2, amount);
+            statement.setLong(3, campId);
+            statement.executeUpdate();
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Unable to add camp control HP: " + exception.getMessage());
+        }
+    }
+
+    public void setCampUpgrade(long campId, String upgrade, boolean enabled) {
+        String clean = upgrade == null ? "" : upgrade.trim().toLowerCase();
+        String column;
+        if (clean.equals("farm")) {
+            column = "farm_upgrade";
+        } else if (clean.equals("breaker")) {
+            column = "breaker_upgrade";
+        } else {
+            plugin.getLogger().warning("Unknown camp upgrade reward: " + upgrade);
+            return;
+        }
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("UPDATE camps SET " + column + " = ? WHERE id = ?")) {
+            statement.setInt(1, enabled ? 1 : 0);
+            statement.setLong(2, campId);
+            statement.executeUpdate();
+        } catch (SQLException exception) {
+            plugin.getLogger().warning("Unable to set camp upgrade: " + exception.getMessage());
         }
     }
 

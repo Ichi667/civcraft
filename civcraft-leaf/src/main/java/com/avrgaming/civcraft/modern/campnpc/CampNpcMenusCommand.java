@@ -18,12 +18,12 @@ public final class CampNpcMenusCommand implements CommandExecutor, TabCompleter 
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         if (!sender.hasPermission("civcraft.campnpcmenus.admin")) {
-            sender.sendMessage("§cНет прав.");
+            sender.sendMessage(service.lang().msg("camp-npc.reload-no-permission", "&cНедостаточно прав."));
             return true;
         }
         if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
             service.reloadEverything();
-            sender.sendMessage("§aCamp NPC menus reloaded.");
+            sender.sendMessage(service.lang().msg("camp-npc.reload", "&aCamp NPC menus перезагружены."));
             return true;
         }
         sender.sendMessage("§e/" + label + " reload");

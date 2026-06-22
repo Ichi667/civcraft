@@ -1,6 +1,7 @@
 package com.avrgaming.civcraft.modern.campnpc.reward;
 
 import com.avrgaming.civcraft.modern.campnpc.bridge.CivCraftBridge;
+import com.avrgaming.civcraft.modern.campnpc.item.CivCraftItemService;
 import com.avrgaming.civcraft.modern.campnpc.quest.QuestDefinition;
 import com.avrgaming.civcraft.modern.campnpc.quest.QuestReward;
 import com.avrgaming.civcraft.modern.campnpc.storage.PluginStorage;
@@ -22,6 +23,7 @@ import org.bukkit.block.Chest;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -31,14 +33,16 @@ public final class QuestRewardService {
     private final PluginStorage storage;
     private final CivCraftBridge civCraft;
     private final CampBonusApplier bonusApplier;
+    private final CivCraftItemService customItems;
     private final ItemsAdderHook itemsAdder = new ItemsAdderHook();
     private final MmoItemsHook mmoItems = new MmoItemsHook();
 
-    public QuestRewardService(JavaPlugin plugin, PluginStorage storage, CivCraftBridge civCraft, CampBonusApplier bonusApplier) {
+    public QuestRewardService(JavaPlugin plugin, PluginStorage storage, CivCraftBridge civCraft, CampBonusApplier bonusApplier, CivCraftItemService customItems) {
         this.plugin = plugin;
         this.storage = storage;
         this.civCraft = civCraft;
         this.bonusApplier = bonusApplier;
+        this.customItems = customItems;
     }
 
     public void give(Player completer, long campId, QuestDefinition quest) {
@@ -56,6 +60,7 @@ public final class QuestRewardService {
             case "UPGRADE", "CAMP_UPGRADE" -> civCraft.setCampUpgrade(campId, reward.value(), true);
             case "HEALTH_BONUS", "CAMP_HEALTH" -> addBonus(campId, "health_bonus", reward.amount());
             case "DAMAGE_BONUS", "CAMP_DAMAGE" -> addBonus(campId, "damage_bonus", reward.amount());
+            case "CIVCRAFT_ITEM", "CIVCRAFT_CUSTOM_ITEM", "CIV_ITEM", "CUSTOM_ITEM" -> giveCivCraftItem(campId, reward);
             case "ITEM", "VANILLA_ITEM", "ITEMSADDER", "MMOITEMS" -> giveRewardItem(campId, reward.item(), reward.amount(), type);
             case "COMMAND", "COMMANDS" -> runCommands(reward.commands(), completer, campId, quest);
             default -> {
@@ -67,6 +72,9 @@ public final class QuestRewardService {
     }
 
     private void addBonus(long campId, String column, double amount) {
+        if (amount == 0D) {
+            return;
+        }
         try (Connection connection = storage.connect(); PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO camp_npc_bonuses(camp_id, health_bonus, damage_bonus)
                 VALUES(?, ?, ?)
@@ -84,14 +92,34 @@ public final class QuestRewardService {
         }
     }
 
+    private void giveCivCraftItem(long campId, QuestReward reward) {
+        ConfigurationSection section = reward.item();
+        String id = reward.value();
+        if (id == null || id.isBlank()) {
+            id = section.getString("id", section.getString("item-id", section.getString("civcraft-item", "")));
+        }
+        if (id == null || id.isBlank()) {
+            plugin.getLogger().warning("CivCraft item reward has no id.");
+            return;
+        }
+        int amount = Math.max(1, section.getInt("amount", reward.amount() > 0D ? (int) Math.round(reward.amount()) : 1));
+        Optional<ItemStack> item = customItems.create(id, amount);
+        item.ifPresent(stack -> deliverToCamp(campId, splitStacks(stack)));
+    }
+
     private void giveRewardItem(long campId, ConfigurationSection itemSection, double fallbackAmount, String rewardType) {
         ItemStack item = createRewardItem(itemSection, rewardType);
         if (item == null || item.getType().isAir()) {
             return;
         }
         int amount = Math.max(1, itemSection.getInt("amount", fallbackAmount > 0D ? (int) Math.round(fallbackAmount) : 1));
+        item.setAmount(amount);
+        deliverToCamp(campId, splitStacks(item));
+    }
+
+    private List<ItemStack> splitStacks(ItemStack item) {
         List<ItemStack> stacks = new ArrayList<>();
-        int left = amount;
+        int left = Math.max(1, item.getAmount());
         while (left > 0) {
             ItemStack stack = item.clone();
             int take = Math.min(stack.getMaxStackSize(), left);
@@ -99,7 +127,7 @@ public final class QuestRewardService {
             stacks.add(stack);
             left -= take;
         }
-        deliverToCamp(campId, stacks);
+        return stacks;
     }
 
     private ItemStack createRewardItem(ConfigurationSection section, String rewardType) {
@@ -123,8 +151,16 @@ public final class QuestRewardService {
         Material material = Material.matchMaterial(section.getString("material", "STONE").toUpperCase(Locale.ROOT));
         ItemStack item = new ItemStack(material == null ? Material.STONE : material);
         ItemMeta meta = item.getItemMeta();
-        if (meta != null && section.contains("custom-model-data")) {
-            meta.setCustomModelData(section.getInt("custom-model-data"));
+        if (meta != null) {
+            if (section.contains("custom-model-data")) {
+                meta.setCustomModelData(section.getInt("custom-model-data"));
+            }
+            for (String flag : section.getStringList("flags")) {
+                try {
+                    meta.addItemFlags(ItemFlag.valueOf(flag.trim().toUpperCase(Locale.ROOT)));
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
             item.setItemMeta(meta);
         }
         return item;

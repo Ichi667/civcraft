@@ -1,6 +1,7 @@
 package com.avrgaming.civcraft.modern.foundation;
 
 import com.avrgaming.civcraft.modern.build.LegacyStructureService;
+import com.avrgaming.civcraft.modern.campnpc.lang.Lang;
 import com.avrgaming.civcraft.modern.config.ModernCivCraftSettings;
 import com.avrgaming.civcraft.modern.domain.CampRecord;
 import com.avrgaming.civcraft.modern.domain.CivRecord;
@@ -39,15 +40,21 @@ public final class FoundationItemListener implements Listener {
     private final CivCraftGameService game;
     private final LegacyStructureService structures;
     private final TabPrefixService tabPrefixes;
+    private final Lang lang;
     private ModernCivCraftSettings settings;
     private final Map<UUID, PendingFoundation> pending = new ConcurrentHashMap<>();
 
     public FoundationItemListener(JavaPlugin plugin, CivCraftGameService game, LegacyStructureService structures, TabPrefixService tabPrefixes, ModernCivCraftSettings settings) {
+        this(plugin, game, structures, tabPrefixes, settings, new Lang(plugin));
+    }
+
+    public FoundationItemListener(JavaPlugin plugin, CivCraftGameService game, LegacyStructureService structures, TabPrefixService tabPrefixes, ModernCivCraftSettings settings, Lang lang) {
         this.plugin = plugin;
         this.game = game;
         this.structures = structures;
         this.tabPrefixes = tabPrefixes;
         this.settings = settings;
+        this.lang = lang;
     }
 
     public void updateSettings(ModernCivCraftSettings settings) {
@@ -65,7 +72,12 @@ public final class FoundationItemListener implements Listener {
         Player player = event.getPlayer();
         if (pending.containsKey(player.getUniqueId())) {
             PendingFoundation current = pending.get(player.getUniqueId());
-            player.sendMessage(current != null && current.awaitingPreview ? "Сначала напишите yes или no для превью." : "Сначала завершите текущее основание. Введите данные в чат.");
+            player.sendMessage(component(current != null && current.awaitingPreview
+                    ? "foundation.pending-preview"
+                    : "foundation.pending-input",
+                    current != null && current.awaitingPreview
+                            ? "&eСначала напишите yes или no для превью."
+                            : "&eСначала завершите текущее основание. Введите данные в чат."));
             event.setCancelled(true);
             return;
         }
@@ -83,21 +95,21 @@ public final class FoundationItemListener implements Listener {
             event.setCancelled(true);
             ItemStack consumed = consumeOneMainHand(player);
             pending.put(player.getUniqueId(), new PendingFoundation(FoundationKind.CAMP, placeLocation, consumed));
-            player.sendMessage("Введите название лагеря. От 5 до 16 символов.");
+            player.sendMessage(component("foundation.enter-camp-name", "&eВведите название лагеря. От 5 до 16 символов."));
             return;
         }
         if (matches(item, settings.civFlagMmoItemId(), settings.civFlagMmoItemType())) {
             event.setCancelled(true);
             ItemStack consumed = consumeOneMainHand(player);
             pending.put(player.getUniqueId(), new PendingFoundation(FoundationKind.CIVILIZATION, placeLocation, consumed));
-            player.sendMessage("Введите название цивилизации. От 5 до 16 символов.");
+            player.sendMessage(component("foundation.enter-civ-name", "&eВведите название цивилизации. От 5 до 16 символов."));
             return;
         }
         if (matches(item, settings.settlerMmoItemId(), settings.settlerMmoItemType())) {
             event.setCancelled(true);
             ItemStack consumed = consumeOneMainHand(player);
             pending.put(player.getUniqueId(), new PendingFoundation(FoundationKind.TOWN, placeLocation, consumed));
-            player.sendMessage("Введите название города. От 5 до 16 символов.");
+            player.sendMessage(component("foundation.enter-town-name", "&eВведите название города. От 5 до 16 символов."));
         }
     }
 
@@ -141,26 +153,26 @@ public final class FoundationItemListener implements Listener {
             rollbackCreatedObjects(player, data);
             structures.cancelPreview(player, true);
             restoreAndRemovePending(player, data);
-            player.sendMessage("Ошибка: " + exception.getMessage());
+            player.sendMessage(component("foundation.error", "&cОшибка: {error}", "error", exception.getMessage()));
         } catch (Exception exception) {
             rollbackCreatedObjects(player, data);
             structures.cancelPreview(player, true);
             restoreAndRemovePending(player, data);
             plugin.getLogger().warning("Foundation item failed for " + player.getName() + ": " + exception.getMessage());
-            player.sendMessage("Ошибка создания основания: " + exception.getMessage());
+            player.sendMessage(component("foundation.create-error", "&cОшибка создания основания: {error}", "error", exception.getMessage()));
         }
     }
 
     private void handlePreviewAnswer(Player player, PendingFoundation data, String input) throws Exception {
         String normalized = input.trim().toLowerCase(Locale.ROOT);
         if (!normalized.equals("yes") && !normalized.equals("no")) {
-            player.sendMessage("Введите yes, чтобы подтвердить основание, или no, чтобы отменить.");
+            player.sendMessage(component("foundation.preview-confirm-again", "&eВведите yes, чтобы подтвердить основание, или no, чтобы отменить."));
             return;
         }
         if (normalized.equals("no")) {
             structures.cancelPreview(player, false);
             restoreAndRemovePending(player, data);
-            player.sendMessage("Основание отменено. Предмет возвращен.");
+            player.sendMessage(component("foundation.cancelled", "&eОснование отменено. Предмет возвращен."));
             return;
         }
         structures.cancelPreview(player, true);
@@ -169,53 +181,53 @@ public final class FoundationItemListener implements Listener {
 
     private void handleCampName(Player player, PendingFoundation data, String name) throws Exception {
         if (!Validation.isValidFoundationName(name)) {
-            player.sendMessage("Название лагеря должно быть от 5 до 16 символов и без спецсимволов. Введите снова.");
+            player.sendMessage(component("foundation.invalid-camp-name", "&cНазвание лагеря должно быть от 5 до 16 символов и без спецсимволов. Введите снова."));
             return;
         }
         data.campName = name;
         data.previewOrigin = structures.previewFoundationStructure(player, settings.campStructureId(), data.location, settings.legacyDefaultDirection());
         data.awaitingPreview = true;
-        player.sendMessage("Превью лагеря показано только вам. Напишите yes, чтобы основать лагерь, или no, чтобы отменить.");
+        player.sendMessage(component("foundation.camp-preview", "&eПревью лагеря показано только вам. Напишите yes, чтобы основать лагерь, или no, чтобы отменить."));
     }
 
     private void handleTownName(Player player, PendingFoundation data, String name) throws Exception {
         if (!Validation.isValidFoundationName(name)) {
-            player.sendMessage("Название города должно быть от 5 до 16 символов и без спецсимволов. Введите снова.");
+            player.sendMessage(component("foundation.invalid-town-name", "&cНазвание города должно быть от 5 до 16 символов и без спецсимволов. Введите снова."));
             return;
         }
         data.townName = name;
         data.previewOrigin = structures.previewFoundationStructure(player, settings.townHallStructureId(), data.location, settings.legacyDefaultDirection());
         data.awaitingPreview = true;
-        player.sendMessage("Превью ратуши показано только вам. Напишите yes, чтобы основать город, или no, чтобы отменить.");
+        player.sendMessage(component("foundation.town-preview", "&eПревью ратуши показано только вам. Напишите yes, чтобы основать город, или no, чтобы отменить."));
     }
 
     private void handleCivilizationInput(Player player, PendingFoundation data, String input) throws Exception {
         if (data.civName == null) {
             if (!Validation.isValidFoundationName(input)) {
-                player.sendMessage("Название цивилизации должно быть от 5 до 16 символов и без спецсимволов. Введите снова.");
+                player.sendMessage(component("foundation.invalid-civ-name", "&cНазвание цивилизации должно быть от 5 до 16 символов и без спецсимволов. Введите снова."));
                 return;
             }
             data.civName = input;
-            player.sendMessage("Введите тег цивилизации. От 3 до 5 символов.");
+            player.sendMessage(component("foundation.enter-civ-tag", "&eВведите тег цивилизации. От 3 до 5 символов."));
             return;
         }
         if (data.civTag == null) {
             if (!Validation.isValidCivTag(input)) {
-                player.sendMessage("Тег цивилизации должен быть от 3 до 5 символов и без спецсимволов. Введите снова.");
+                player.sendMessage(component("foundation.invalid-civ-tag", "&cТег цивилизации должен быть от 3 до 5 символов и без спецсимволов. Введите снова."));
                 return;
             }
             data.civTag = input.toUpperCase(Locale.ROOT);
-            player.sendMessage("Введите название столицы. От 5 до 16 символов.");
+            player.sendMessage(component("foundation.enter-capital-name", "&eВведите название столицы. От 5 до 16 символов."));
             return;
         }
         if (!Validation.isValidFoundationName(input)) {
-            player.sendMessage("Название столицы должно быть от 5 до 16 символов и без спецсимволов. Введите снова.");
+            player.sendMessage(component("foundation.invalid-capital-name", "&cНазвание столицы должно быть от 5 до 16 символов и без спецсимволов. Введите снова."));
             return;
         }
         data.capitalName = input;
         data.previewOrigin = structures.previewFoundationStructure(player, settings.capitolStructureId(), data.location, settings.legacyDefaultDirection());
         data.awaitingPreview = true;
-        player.sendMessage("Превью капитолия показано только вам. Напишите yes, чтобы основать цивилизацию, или no, чтобы отменить.");
+        player.sendMessage(component("foundation.capital-preview", "&eПревью капитолия показано только вам. Напишите yes, чтобы основать цивилизацию, или no, чтобы отменить."));
     }
 
     private void confirmFoundation(Player player, PendingFoundation data) throws Exception {
@@ -228,7 +240,7 @@ public final class FoundationItemListener implements Listener {
                 data.success = true;
                 tabPrefixes.update(player);
                 pending.remove(player.getUniqueId());
-                player.sendMessage("Лагерь " + camp.name() + " основан.");
+                player.sendMessage(component("foundation.camp-created", "&aЛагерь {name} основан.", "name", camp.name()));
             }
             case TOWN -> {
                 TownRecord town = game.createTownAt(player, data.townName, origin);
@@ -236,7 +248,7 @@ public final class FoundationItemListener implements Listener {
                 structures.buildTownHallStructureAtOrigin(player, town, origin);
                 data.success = true;
                 pending.remove(player.getUniqueId());
-                player.sendMessage("Город " + town.name() + " основан. Ратуша построена.");
+                player.sendMessage(component("foundation.town-created", "&aГород {name} основан. Ратуша построена.", "name", town.name()));
             }
             case CIVILIZATION -> {
                 CivRecord civ = game.createCivilization(player, data.civName, data.civTag);
@@ -246,7 +258,7 @@ public final class FoundationItemListener implements Listener {
                 structures.buildCapitalStructureAtOrigin(player, capital, origin);
                 data.success = true;
                 pending.remove(player.getUniqueId());
-                player.sendMessage("Цивилизация " + civ.name() + " [" + civ.tag() + "] основана. Столица: " + capital.name() + ". Капитолий построен.");
+                player.sendMessage(component("foundation.civ-created", "&aЦивилизация {name} [{tag}] основана. Столица: {capital}. Капитолий построен.", "name", civ.name(), "tag", civ.tag(), "capital", capital.name()));
             }
         }
     }
@@ -355,6 +367,10 @@ public final class FoundationItemListener implements Listener {
             }
         }
         return "";
+    }
+
+    private net.kyori.adventure.text.Component component(String key, String fallback, Object... replacements) {
+        return lang.component(key, fallback, replacements);
     }
 
     private enum FoundationKind {

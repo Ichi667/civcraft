@@ -1,5 +1,7 @@
 package com.avrgaming.civcraft.modern.build;
 
+import com.avrgaming.civcraft.modern.CivCraftModernPlugin;
+import com.avrgaming.civcraft.modern.campnpc.lang.Lang;
 import com.avrgaming.civcraft.modern.config.ModernCivCraftSettings;
 import com.avrgaming.civcraft.modern.domain.ResidentProfile;
 import com.avrgaming.civcraft.modern.domain.TownRecord;
@@ -39,6 +41,7 @@ public final class LegacyStructureService {
     private final StructureDefinitionService definitions;
     private final BuildQueue buildQueue;
     private ModernCivCraftSettings settings;
+    private Lang fallbackLang;
 
     public LegacyStructureService(JavaPlugin plugin, StorageBootstrap storage, ModernCivCraftSettings settings, CivCraftEconomyService economy, CivCraftGameService game) {
         this.plugin = plugin;
@@ -200,7 +203,7 @@ public final class LegacyStructureService {
         }
         restorePhantomPreview(player, preview);
         if (!silent) {
-            player.sendMessage("Превью постройки отменено.");
+            player.sendMessage(lang().component("build.preview-cancelled", "&eПревью постройки отменено."));
         }
     }
 
@@ -524,8 +527,10 @@ public final class LegacyStructureService {
                 }
                 if (cursor >= blocks.size()) {
                     cancel();
-                    player.sendMessage("Превью постройки показано только вам. Напишите yes, чтобы начать строительство, или no, чтобы отменить.");
-                    player.sendMessage("Размер: " + preview.sizeX + "x" + preview.sizeY + "x" + preview.sizeZ + ", origin: " + preview.origin.getBlockX() + " " + preview.origin.getBlockY() + " " + preview.origin.getBlockZ());
+                    player.sendMessage(lang().component("build.preview-shown", "&eПревью постройки показано только вам. Напишите yes, чтобы начать строительство, или no, чтобы отменить."));
+                    player.sendMessage(lang().component("build.preview-size", "&7Размер: {size_x}x{size_y}x{size_z}, origin: {x} {y} {z}",
+                            "size_x", preview.sizeX, "size_y", preview.sizeY, "size_z", preview.sizeZ,
+                            "x", preview.origin.getBlockX(), "y", preview.origin.getBlockY(), "z", preview.origin.getBlockZ()));
                 }
             }
         }.runTaskTimer(plugin, 1L, 1L);
@@ -570,8 +575,10 @@ public final class LegacyStructureService {
                 }
                 if (cursor >= blocks.size()) {
                     cancel();
-                    player.sendMessage("FAWE-превью постройки показано только вам. Напишите yes, чтобы начать строительство, или no, чтобы отменить.");
-                    player.sendMessage("Размер: " + preview.sizeX + "x" + preview.sizeY + "x" + preview.sizeZ + ", origin: " + preview.origin.getBlockX() + " " + preview.origin.getBlockY() + " " + preview.origin.getBlockZ());
+                    player.sendMessage(lang().component("build.fawe-preview-shown", "&eFAWE-превью постройки показано только вам. Напишите yes, чтобы начать строительство, или no, чтобы отменить."));
+                    player.sendMessage(lang().component("build.preview-size", "&7Размер: {size_x}x{size_y}x{size_z}, origin: {x} {y} {z}",
+                            "size_x", preview.sizeX, "size_y", preview.sizeY, "size_z", preview.sizeZ,
+                            "x", preview.origin.getBlockX(), "y", preview.origin.getBlockY(), "z", preview.origin.getBlockZ()));
                 }
             }
         }.runTaskTimer(plugin, 1L, 1L);
@@ -951,6 +958,16 @@ public final class LegacyStructureService {
     }
 
     public record DemolishBuildResult(StorageBootstrap.StructureBuildView build, long refund) {
+    }
+
+    private Lang lang() {
+        if (plugin instanceof CivCraftModernPlugin modern && modern.lang() != null) {
+            return modern.lang();
+        }
+        if (fallbackLang == null) {
+            fallbackLang = new Lang(plugin);
+        }
+        return fallbackLang;
     }
 
     private record PhantomBlock(Location location, BlockData blockData) {

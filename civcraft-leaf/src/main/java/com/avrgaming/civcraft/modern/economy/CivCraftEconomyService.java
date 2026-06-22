@@ -5,6 +5,7 @@ import com.avrgaming.civcraft.modern.storage.StorageBootstrap;
 import java.sql.SQLException;
 import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -69,6 +70,10 @@ public final class CivCraftEconomyService {
     }
 
     public void deposit(Player player, double amount, String reason) throws SQLException {
+        deposit((OfflinePlayer) player, amount, reason);
+    }
+
+    public void deposit(OfflinePlayer player, double amount, String reason) throws SQLException {
         validateAmount(amount);
         if (amount == 0.0) {
             return;
